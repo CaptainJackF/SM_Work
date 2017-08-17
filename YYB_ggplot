@@ -1,0 +1,26 @@
+
+
+library( ggplot2)
+library( readxl)
+library( dplyr)
+
+# change the work directory.
+setwd( "F:\\数据分析需求\\2017.08.16 数据分析")
+# read the dataset.
+YYB_dataset <- read_excel( "应用宝平台源数据.xlsx", 
+                           sheet = "1. 应用宝平台源数据", col_names = TRUE, na = "")
+
+# 筛选出"需要分析"的数据，并选择出部分需要做图的变量。
+YYB_dataset_filter <- filter( YYB_dataset, `筛选` == "需要分析",
+                              `游戏应用` == c( "上古修真", "幻剑修仙", "梦幻修仙录", "正统三国", "英雄魔法门") ) %>%
+  select( `统计日期`, `游戏应用`, `新增玩家`, `活跃玩家`, 
+          `充值金额（元）`, `充值玩家`, `上线周期(天)`) %>% 
+  mutate( `上线第几天` = as.numeric(`上线周期(天)`))
+
+# 使用ggplot 做图
+YYB_ggplot <- ggplot( data = YYB_dataset_filter, 
+                      aes( x = `上线第几天`, y = `充值金额（元）`, color = `游戏应用`)) +
+  geom_area( aes( fill = `游戏应用`), position = "stack", alpha = 0.5) + 
+  labs( title = "部分游戏充值金额对比") + 
+  facet_grid( `游戏应用` ~ . ) +
+  theme_bw()
