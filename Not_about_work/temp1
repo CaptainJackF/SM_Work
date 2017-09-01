@@ -1,0 +1,11 @@
+id1 <- c( 1,1,1,2,2,5,5,10,10,10,10) 
+id2 <- c( 14,14,14,8,8,7,7,14,14,14,14)
+status1 <- c( 1,1,1,0,0,0,0,1,1,1,1)
+time <- c( 0,1,2,0,1,0,1,0,1,2,3)
+df <- data.frame( id1, id2, status1, time)
+
+temp_df <- aggregate( time ~ id1 + status1, df, max) 
+temp_df <- cbind( temp_df, status2 = temp_df$status1 )
+output_df <- merge( test, temp, all = TRUE)
+output_df[is.na( output_df)] = 0
+test;output
