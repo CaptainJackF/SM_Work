@@ -6,6 +6,6 @@ df <- data.frame( id1, id2, status1, time)
 
 temp_df <- aggregate( time ~ id1 + status1, df, max) 
 temp_df <- cbind( temp_df, status2 = temp_df$status1 )
-output_df <- merge( test, temp, all = TRUE)
-output_df[is.na( output_df)] = 0
-test;output
+output_df <- merge( df, temp_df, all = TRUE)
+output_df[ is.na( output_df)] = 0
+df;output_df
