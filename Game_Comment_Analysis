@@ -38,8 +38,34 @@ comment[ ,"Comment_date":= as.Date( Comment_time)] # dt[]操作中，不需要�
 comment[ 1:10, .( Comment_time, Comment_date)] # 采取list()的方式选取变量则不会， .() 是list()的简写
 
 
-# -----------------------  分词  ------------------
+# -----------------------  分词&删除停顿词  ------------------
 library( rJava)
 library( Rwordseg) # 只有配置了rJava才能安装成功，前者是后者的依赖包。 
 library( RColorBrewer)
-library( wordcloud)
+library( wordcloud2)
+
+com <- comment[ 1:100, Comment]
+sep_temp <- segmentCN( com) 
+
+words <- lapply( sep_temp, strsplit," ")  
+wordsNum <- table( unlist( words) )  
+wordsNum <- sort( wordsNum) #排序  
+wordsData <- data.frame( words = names( wordsNum), freq = wordsNum)  
+ 
+colors <- brewer.pal( 8, "Dark2")  
+
+wordsData1 <- wordsData[ ,2:3][ order( -wordsData[ ,2:3]$freq.Freq),]
+
+wordcloud2( 
+  wordsData1, # data: 数据包含具体词语以及频率
+  size = 1,  # size: 字体大小
+  color = "random-light", # color: 字体颜色
+  backgroundColor = 'grey', # backgroundColor: 背景色
+  fontFamily = "微软雅黑", # fontFamily: 字体
+  shape = "circle", # shape: 形状，默认circle
+  minRotation = -pi/4, # 旋转最小角度
+  maxRotation = pi/4, # 旋转最大角度
+  rotateRatio = 0.5  # 字体旋转比例, 设为1则所有字体都旋转
+) 
+
+letterCloud( wordsData1[ ,2:3], word ="A", wordSize = 2,color = 'random-dark')
