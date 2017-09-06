@@ -1,8 +1,9 @@
 # ASO game comment
 
 library( dplyr)
-library( data.table) # load data.table package( fread function ) for read csv file. ( solve question 1)
+library( data.table) # load data.table package( `fread` function ) for read csv file. ( solve question 1)
 
+# -----------------------  读取文件&筛选有用信息  ------------------
 setwd( "D:\\R_Working_Directory\\Data\\SM")
 #comment <- read.csv("aso_comments_test.csv", header = FALSE, quote = "", stringsAsFactors = FALSE)
 # Question 1: Can not read special character, such as "→", into R.
@@ -16,9 +17,29 @@ comment <- fread(
   data.table = TRUE # TRUE returns a data.table. FALSE returns a data.frame
 )
 dim( comment) # DF 维度
-
-names( comment) <- c( "id", "Client", "Store", " device", "Location", 
+# add col names. 
+names( comment) <- c( "id", "Client", "Store", "Device", "Location", 
                "Free", "Game_type", "Null_1", "Game_name", "Null_2",
                "Null_3", "Unknow_1", "Comment_title", "User_name", 
-               "Comment", "Comment_date", "Null_5") 
-# add col names. 
+               "Comment", "Comment_time", "Null_5") 
+
+# 设置key，key 在data.table 中是灵魂一般的存在，设置了 key后，会自动按照key排序
+setkey( comment, Game_type) 
+haskey( comment) # 检验data.table是否存在key
+# 删除列, “-” 与 "!" 功能一样。
+comment <- comment[ ,-c( "Null_1", "Null_2", "Null_3", "Null_5", 
+                         "Client", "Store", "Device", "Location", "Free")]
+# 添加新列，直接用 [] 操作， "New_Col":= function/100 添加计算后的数值或者直接添加数值/字符串
+comment[ ,"Comment_date":= as.Date( Comment_time)] # dt[]操作中，不需要加$ 
+
+# 查看新列
+# 对于dft来说，[] 中不用使用$符号即可引用列名，但直接输入列名，则输出的结果会降维(同df).
+# comment[ 1:10, Comment_date] # 
+comment[ 1:10, .( Comment_time, Comment_date)] # 采取list()的方式选取变量则不会， .() 是list()的简写
+
+
+# -----------------------  分词  ------------------
+library( rJava)
+library( Rwordseg) # 只有配置了rJava才能安装成功，前者是后者的依赖包。 
+library( RColorBrewer)
+library( wordcloud)
