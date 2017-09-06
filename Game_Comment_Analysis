@@ -1,0 +1,24 @@
+# ASO game comment
+
+library( dplyr)
+library( data.table) # load data.table package( fread function ) for read csv file. ( solve question 1)
+
+setwd( "D:\\R_Working_Directory\\Data\\SM")
+#comment <- read.csv("aso_comments_test.csv", header = FALSE, quote = "", stringsAsFactors = FALSE)
+# Question 1: Can not read special character, such as "→", into R.
+
+comment <- fread( 
+  "aso_comments2.csv", 
+  sep = ",",
+  stringsAsFactors = FALSE, 
+  header = FALSE, # TRUE : first line contain column names.
+  encoding = "unknown", # default is "unknown".
+  data.table = TRUE # TRUE returns a data.table. FALSE returns a data.frame
+)
+dim( comment) # DF 维度
+
+names( comment) <- c( "id", "Client", "Store", " device", "Location", 
+               "Free", "Game_type", "Null_1", "Game_name", "Null_2",
+               "Null_3", "Unknow_1", "Comment_title", "User_name", 
+               "Comment", "Comment_date", "Null_5") 
+# add col names. 
