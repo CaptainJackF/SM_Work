@@ -1,0 +1,50 @@
+# 读取文件 > 发送午饭、晚饭ID到指定邮箱。
+library( mailR)
+library( sendmailR)
+library( readxl)
+library( dplyr)
+
+setwd( "C:\\Users\\pc\\Documents\\Tencent Files\\137466002\\FileRecv")
+
+all_file <- list.files() # 便利文件夹
+# 查找 当天日期 + "报餐" 文件，并提取出来。
+# grep可以返回index，grepl 返回逻辑值。
+# filename <- all_file[ grep( paste0( as.Date( Sys.Date()), "报餐"), all_file)]
+filename <- all_file[ grepl( paste0( as.Date( Sys.Date()), "报餐"), all_file)]
+
+file <- read_excel( filename, col_names = TRUE, skip = 1) # read file，跳过第一行
+
+# 选择出相关的列，并筛选"数据中心"相关信息。
+lunch <- select( file, `序号`, `部门`, `姓名`, `午餐` ) %>%
+  filter( `部门` == "数据中心")
+dinner <- select( file, `序号__1`, `部门__1`, `姓名__1`, `晚餐` ) %>%
+  filter( `部门__1` == "数据中心")
+
+
+# 163 邮箱的授权码等第三方信息很容易配置，但想通过企业邮箱发送邮件，比较困难。
+sender <- "captainjack_f@163.com"
+recipients <- "fangjie@910app.com"
+email <- send.mail(
+  from = sender,
+  to = recipients,
+  subject="Subject of the email",
+  body = "Body of the email",
+  html = T,
+  smtp = list(
+    host.name = "smtp.163.com", 
+    user.name = "captainjack_f",
+    passwd = "Lightning0410",
+    port = 465, ssl=TRUE
+  ),
+  authenticate = TRUE,
+  send = TRUE
+)
+
+
+control <- list( smtpServer = "smtp.datayes.com", smtpPortSMTP = 465)
+from = "sender@126.com"
+to = "recipent@126.com"
+subj = "testing mail"
+msg = "sent by R"
+sendmail( from, to, subj, msg, control = control)
+
