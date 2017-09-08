@@ -20,6 +20,8 @@ lunch <- select( file, `序号`, `部门`, `姓名`, `午餐` ) %>%
 dinner <- select( file, `序号__1`, `部门__1`, `姓名__1`, `晚餐` ) %>%
   filter( `部门__1` == "数据中心")
 
+# 删除文件
+file.remove( filename)
 
 # 163 邮箱的授权码等第三方信息很容易配置，但想通过企业邮箱发送邮件，比较困难。
 sender <- "captainjack_f@163.com"
