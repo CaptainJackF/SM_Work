@@ -2,6 +2,7 @@
 
 library( dplyr)
 library( data.table) # load data.table package( `fread` function ) for read csv file. ( solve question 1)
+library( caret)
 
 # -----------------------  读取文件&筛选有用信息  ------------------
 setwd( "D:\\R_Working_Directory\\Data\\SM")
@@ -16,7 +17,7 @@ comment <- fread(
   encoding = "unknown", # default is "unknown".
   data.table = TRUE # TRUE returns a data.table. FALSE returns a data.frame
 )
-dim( comment) # DF 维度
+
 # add col names. 
 names( comment) <- c( "id", "Client", "Store", "Device", "Location", 
                "Free", "Game_type", "Null_1", "Game_name", "Null_2",
@@ -31,6 +32,7 @@ comment <- comment[ ,-c( "Null_1", "Null_2", "Null_3", "Null_5",
                          "Client", "Store", "Device", "Location", "Free")]
 # 添加新列，直接用 [] 操作， "New_Col":= function/100 添加计算后的数值或者直接添加数值/字符串
 comment[ ,"Comment_date":= as.Date( Comment_time)] # dt[]操作中，不需要加$ 
+dim( comment) # DF 维度
 
 # 查看新列
 # 对于dft来说，[] 中不用使用$符号即可引用列名，但直接输入列名，则输出的结果会降维(同df).
@@ -38,14 +40,41 @@ comment[ ,"Comment_date":= as.Date( Comment_time)] # dt[]操作中，不需要�
 comment[ 1:10, .( Comment_time, Comment_date)] # 采取list()的方式选取变量则不会， .() 是list()的简写
 
 
+a <- as.data.table( table( comment$Game_name))
+
 # -----------------------  分词&删除停顿词  ------------------
 library( rJava)
 library( Rwordseg) # 只有配置了rJava才能安装成功，前者是后者的依赖包。 
 library( RColorBrewer)
 library( wordcloud2)
 
-com <- comment[ 1:100, Comment]
-sep_temp <- segmentCN( com) 
+# 加载停用词
+StopWords <-  unlist( 
+  read.table(
+    "D:\\R_Working_Directory\\Data\\Text\\Stopwords.txt", 
+    stringsAsFactors = FALSE
+  )
+) 
+
+removewords <- function( target_words, stop_words){
+  target_words = target_words[ target_words%in%stop_words==FALSE]
+  return( target_words)
+}
+
+
+# 抽取前 10k条数据，因为无法对游戏名做分层抽样
+# Question 2: 采用分层抽样的方法会比较好，尝试寻找别的方法做抽样
+com <- comment[ 1:10000, `Comment`] 
+sep_temp <- segmentCN( com) # 分词
+
+removewords <- function( target_words, stop_words){
+  target_words = target_words[ target_words%in%stop_words==FALSE]
+  return( target_words)
+}
+
+# sapply 可以针对 list做并航运算
+segword2 <- sapply( X = sep_temp[1:10], FUN = removewords, StopWords)
+
 
 words <- lapply( sep_temp, strsplit," ")  
 wordsNum <- table( unlist( words) )  
@@ -69,3 +98,4 @@ wordcloud2(
 ) 
 
 letterCloud( wordsData1[ ,2:3], word ="A", wordSize = 2,color = 'random-dark')
+
