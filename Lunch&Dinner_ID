@@ -6,23 +6,32 @@ library( dplyr)
 
 setwd( "C:\\Users\\pc\\Documents\\Tencent Files\\137466002\\FileRecv")
 
+# --------- Method 1 
 all_file <- list.files() # 便利文件夹
 # 查找 当天日期 + "报餐" 文件，并提取出来。
 # grep可以返回index，grepl 返回逻辑值。
+# all_file <- list.files( ".")
 # filename <- all_file[ grep( paste0( as.Date( Sys.Date()), "报餐"), all_file)]
-filename <- all_file[ grepl( paste0( as.Date( Sys.Date()), "报餐"), all_file)]
+filename <- all_file[ grepl( paste0( as.Date( Sys.Date()), "报餐*"), all_file)]
+file <- read_excel( filename, col_names = TRUE, skip = 1) # read file，跳过第一行
 
+# ---------- Method 2: 直接在list.files() 中识别文件名
+filename <- list.files( ".", pattern = paste0( as.Date( Sys.Date()), "报餐")) # 便利文件夹
+# list.files 函数中的 pattern参：可以返回第一个与参数相匹配的文件名。
 file <- read_excel( filename, col_names = TRUE, skip = 1) # read file，跳过第一行
 
 # 选择出相关的列，并筛选"数据中心"相关信息。
 lunch <- select( file, `序号`, `部门`, `姓名`, `午餐` ) %>%
   filter( `部门` == "数据中心")
+
 dinner <- select( file, `序号__1`, `部门__1`, `姓名__1`, `晚餐` ) %>%
   filter( `部门__1` == "数据中心")
 
 # 删除文件
 file.remove( filename)
 
+
+# -------------------------
 # 163 邮箱的授权码等第三方信息很容易配置，但想通过企业邮箱发送邮件，比较困难。
 sender <- "captainjack_f@163.com"
 recipients <- "fangjie@910app.com"
