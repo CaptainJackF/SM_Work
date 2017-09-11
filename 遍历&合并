@@ -1,0 +1,13 @@
+# list.files & rbind dataset
+
+setwd( "F:\\数据分析需求\\2017.09\\2017.09.06-0 新闻渠道（智汇推、UC、百度feed）\\UC")
+
+file_list <- list.files( ".", pattern = "计划")
+
+dataset <- data.frame()
+for( i in file_list){
+  temp_file <- read.csv( i,  stringsAsFactors = F, header = T)
+  dataset <- rbind( dataset, temp_file)
+  remove( temp_file)
+}
+write.csv( dataset, "UC_Dataset.csv", row.names = F)
