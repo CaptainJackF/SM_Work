@@ -1,4 +1,5 @@
 # 读取文件 > 发送午饭、晚饭ID到指定邮箱。
+# 因为已经固定了ID, 不会每天发送 ID文件了, 所以该脚本停止更新。
 library( mailR)
 library( sendmailR)
 library( readxl)
@@ -31,7 +32,12 @@ dinner <- select( file, `序号__1`, `部门__1`, `姓名__1`, `晚餐` ) %>%
 file.remove( filename)
 
 
-# -------------------------
+# ----------------------------------- 以下为测试代码
+library( rmarkdown)
+render( "R_Markdwon&Shiny.Rmd", "html_document", encoding = "utf-8")
+knit("R_Markdwon&Shiny.Rmd",output="report.md")
+markdownToHTML("report.md","report.html",options=c("hard_wrap","use_xhml","smartypants"))
+
 # 163 邮箱的授权码等第三方信息很容易配置，但想通过企业邮箱发送邮件，比较困难。
 sender <- "captainjack_f@163.com"
 recipients <- "fangjie@910app.com"
@@ -39,8 +45,10 @@ email <- send.mail(
   from = sender,
   to = recipients,
   subject="Subject of the email",
-  body = "Body of the email",
-  html = T,
+  html = TRUE,
+  inline = T,
+  body = "R_Markdwon_Shiny.html",
+  encoding = "utf-8",
   smtp = list(
     host.name = "smtp.163.com", 
     user.name = "captainjack_f",
