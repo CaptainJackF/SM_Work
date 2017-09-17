@@ -2,10 +2,10 @@
 
 library( dplyr)
 library( data.table) # load data.table package( `fread` function ) for read csv file. ( solve question 1)
-library( caret)
+# library( caret)
 
-# -----------------------  读取文件&筛选有用信息  ------------------
-setwd( "D:\\R_Working_Directory\\Data\\SM")
+# ------- 读取文件&筛选有用信息
+setwd( "D:\\R_Working_Directory\\Data\\Game_Comment")
 #comment <- read.csv("aso_comments_test.csv", header = FALSE, quote = "", stringsAsFactors = FALSE)
 # Question 1: Can not read special character, such as "→", into R.
 
@@ -20,9 +20,9 @@ comment <- fread(
 
 # add col names. 
 names( comment) <- c( "id", "Client", "Store", "Device", "Location", 
-               "Free", "Game_type", "Null_1", "Game_name", "Null_2",
-               "Null_3", "Unknow_1", "Comment_title", "User_name", 
-               "Comment", "Comment_time", "Null_5") 
+                      "Free", "Game_type", "Null_1", "Game_name", "Null_2",
+                      "Null_3", "Unknow_1", "Comment_title", "User_name", 
+                      "Comment", "Comment_time", "Null_5") 
 
 # 设置key，key 在data.table 中是灵魂一般的存在，设置了 key后，会自动按照key排序
 setkey( comment, Game_type) 
@@ -39,10 +39,21 @@ dim( comment) # DF 维度
 # comment[ 1:10, Comment_date] # 
 comment[ 1:10, .( Comment_time, Comment_date)] # 采取list()的方式选取变量则不会， .() 是list()的简写
 
+Wangzhe <- filter( comment, Game_name == "王者荣耀")
+write.csv( Wangzhe, "王者荣耀.csv")
+# ------ 探索性分析 & 
+library( ggplot2)
 
-a <- as.data.table( table( comment$Game_name))
+(date_st <- ggplot( comment, aes( x=Comment_date)) + 
+  geom_histogram()
+)
 
-# -----------------------  分词&删除停顿词  ------------------
+game_name_st <- as.data.table( table( comment$Game_name) )
+game_name <- ggplot( game_name_st, aes( x=V1, y=N)) +
+  geom_bar()
+
+
+# ------ 分词&删除停顿词
 library( rJava)
 library( Rwordseg) # 只有配置了rJava才能安装成功，前者是后者的依赖包。 
 library( RColorBrewer)
@@ -51,7 +62,7 @@ library( wordcloud2)
 # 加载停用词
 StopWords <-  unlist( 
   read.table(
-    "D:\\R_Working_Directory\\Data\\Text\\Stopwords.txt", 
+    "Stopwords.txt", 
     stringsAsFactors = FALSE
   )
 ) 
@@ -80,7 +91,7 @@ words <- lapply( sep_temp, strsplit," ")
 wordsNum <- table( unlist( words) )  
 wordsNum <- sort( wordsNum) #排序  
 wordsData <- data.frame( words = names( wordsNum), freq = wordsNum)  
- 
+
 colors <- brewer.pal( 8, "Dark2")  
 
 wordsData1 <- wordsData[ ,2:3][ order( -wordsData[ ,2:3]$freq.Freq),]
@@ -99,3 +110,27 @@ wordcloud2(
 
 letterCloud( wordsData1[ ,2:3], word ="A", wordSize = 2,color = 'random-dark')
 
+
+
+# 抽样
+set.seed(1)
+comment_sample_train <- comment[ sample( nrow( comment), 200), ]
+set.seed(6)
+comment_sample_test <- comment[ sample( nrow( comment), 500), ]
+comment_sample <- rbind( comment_sample_train, comment_sample_test)
+
+library( RTextTools)
+library( e1071)
+# build dtm
+matrix <- create_matrix( comment_sample$Comment, language = "Chinese", 
+                      removeStopwords = FALSE, removeNumbers = TRUE, 
+                      stemWords = FALSE) 
+
+# train the model
+mat <- as.matrix( matrix)
+classifier <- naiveBayes( mat[ 1:200,], as.factor( comment_sample_train$Comment) )
+
+# test the validity
+predicted <- predict( classifier, mat[ 201:700,]); predicted
+table( comment_sample_test$Comment, predicted)
+recall_accuracy( comment_sample_test$Comment, predicted)
