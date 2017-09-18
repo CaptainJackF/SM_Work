@@ -79,6 +79,11 @@ Change_to_Class <- function( x){
   return( as.numeric( filter( wordsNum_1, Char == x)[3] ) )
 }
 
+num_of_words <- as.numeric( lengths( words[1:165]))
+element <- as.character( unlist( words[1:165]))
+x <- data.frame( index_code = rep(1:165, num_of_words), element)
+
+
 rapply( sep_temp[1:4], Change_to_Class, how = "list")
 
 
