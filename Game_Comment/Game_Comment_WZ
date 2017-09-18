@@ -1,0 +1,107 @@
+# 王者荣耀评论文本分析
+
+library( dplyr)
+library( data.table) # load data.table package( `fread` function ) for read csv file. ( solve question 1)
+library( caret)
+
+# ------  读取文件&筛选有用信息
+setwd( "D:\\R_Working_Directory\\Data\\SM\\Game_Analysis")
+
+#comment <- read.csv("aso_comments_test.csv", header = FALSE, quote = "", stringsAsFactors = FALSE)
+# Question 1: Can not read special character, such as "→", into R.
+comment <- fread( 
+  "aso_comments2.csv", 
+  sep = ",",
+  stringsAsFactors = FALSE, 
+  header = FALSE, # TRUE : first line contain column names.
+  encoding = "unknown", # default is "unknown".
+  data.table = TRUE # TRUE returns a data.table. FALSE returns a data.frame
+)
+
+# add col names. 
+names( comment) <- c( "id", "Client", "Store", "Device", "Location", 
+                      "Free", "Game_type", "Null_1", "Game_name", "Null_2",
+                      "Null_3", "Unknow_1", "Comment_title", "User_name", 
+                      "Comment", "Comment_time", "Null_5") 
+
+# 删除列, “-” 与 "!" 功能一样。
+comment <- comment[ ,-c( "Null_1", "Null_2", "Null_3", "Null_5", 
+                         "Client", "Store", "Device", "Location", "Free")]
+# 添加新列，直接用 [] 操作， "New_Col":= function/100 添加计算后的数值或者直接添加数值/字符串
+comment[ ,"Comment_date":= as.Date( Comment_time)] # dt[]操作中，不需要加$ 
+dim( comment) # DF 维度
+
+#Wangzhe <- comment[ Game_name == '王者荣耀'] # data.table 的操作，如果用 filter, 会将table 格式转为 frame。
+Wangzhe <- filter( comment, Game_name == "王者荣耀")
+# write.csv( Wangzhe, "王者荣耀.csv")
+
+# ------ 分词
+library( rJava)
+library( Rwordseg) 
+
+StopWords <-  unlist( 
+  read.table(
+    "D:\\R_Working_Directory\\Data\\Text\\Stopwords.txt", 
+    stringsAsFactors = FALSE
+  )
+) 
+
+
+need_sep <- Wangzhe[ ,"Comment"]  # 提取评论数据
+sep_temp <- segmentCN( need_sep) # 分词
+
+removewords <- function( target_words, stop_words){
+  target_words = target_words[ target_words%in%stop_words==FALSE]
+  return( target_words)
+}
+
+# sapply 可以针对 list做并航运算
+segword2 <- sapply( X = sep_temp, FUN = removewords, StopWords)
+
+
+words <- sapply( segword2, strsplit," ")  # 
+wordsNum <- tbl_df( as.data.frame( table( unlist( words) ) ) ) %>%
+  arrange( -Freq)
+names( wordsNum) <- c( "Char", "Freq") # 重命名header
+write.csv( wordsNum, "Game_Analysis\\Need to classfy.csv", row.names = F) # 写出，人工将词意划分为2类
+# 再读入
+wordsNum_1 <- tbl_df( fread( 
+  "Game_Analysis\\Need to classfy.csv", 
+  sep = ",",
+  stringsAsFactors = FALSE, 
+  header = TRUE, # TRUE : first line contain column names.
+  encoding = "unknown", # default is "unknown".
+  data.table = FALSE # TRUE returns a data.table. FALSE returns a data.frame
+) )
+
+# ------ 概率算法
+Change_to_Class <- function( x){
+  return( as.numeric( filter( wordsNum_1, Char == x)[3] ) )
+}
+
+rapply( sep_temp[1:4], Change_to_Class, how = "list")
+
+
+# ------ k-means 聚类
+wordsNum_for_k <- filter( wordsNum, Freq >= 10)
+
+dist_tdm_removed <- dissimilarity(tdm_removed, method = 'cosine')
+hc <- hclust(dist_tdm_removed, method = 'mcquitty')
+cutNum = 20
+ct = cutree(hc,k=cutNum)
+sink(file="result.txt")
+for(i in 1:cutNum){  
+  print(paste("第",i,"类： ",sum(ct==i),"个"));
+  print("----------------");
+  print(attr(ct[ct==i],"names"));#   print(doc[as.integer(names(ct[ct==i]))])  
+  print("----------------")
+}
+sink()#输出结果
+output=data.frame(clas=NULL,tag=NULL,text=NULL)
+for(i in 1:cutNum){
+  in_tag=tag[as.integer(names(ct[ct==i]))]  
+  in_text=doc[as.integer(names(ct[ct==i]))]  
+  cut_output=data.frame(clas=rep(i,length(in_tag)),tag=in_tag,text=in_text)  
+  output=rbind(output,cut_output)
+}
+write.table(output,file="classification.csv",sep=",",row.names=F)
