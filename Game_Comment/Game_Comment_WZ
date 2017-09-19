@@ -79,12 +79,37 @@ Change_to_Class <- function( x){
   return( as.numeric( filter( wordsNum_1, Char == x)[3] ) )
 }
 
-num_of_words <- as.numeric( lengths( words[1:165]))
-element <- as.character( unlist( words[1:165]))
-x <- data.frame( index_code = rep(1:165, num_of_words), element)
+num_of_words <- as.numeric( lengths( words))
+length_of_list <- length( words)
+element <- as.character( unlist( words))
 
+element_df <- data.frame( 
+  index_code = rep( 1:length_of_list, num_of_words), 
+  Char = element,
+  Char_num_each = rep( num_of_words, num_of_words))
 
-rapply( sep_temp[1:4], Change_to_Class, how = "list")
+# Method 1: left join. 不到1秒
+element_changed_1 <- merge( element_df, wordsNum_1, by = "Char") # 
+
+# Method 2: apply & function, 将近半分钟
+# element_changed_2 <- element_df
+# element_changed_2$Class <- sapply( element_changed_2$Char, Change_to_Class)
+
+# Calculate the probability.
+results <- tbl_df( element_changed_1) %>% 
+  group_by( index_code, Class_1) %>%
+  select( index_code, Class_1, Char_num_each) %>%
+  summarise(
+    Char_num_each = mean( Char_num_each, na.rm = TRUE)
+)
+
+length( table( results$index_code) )
+library( reshape2)
+x <- dcast( results, index_code ~ Class_1, mean, fill = 0)
+
+Wangzhe_result
+x <- merge( Wangzhe_result, dcast( results, index_code ~ Class_1, mean, fill = 0), by = "index_code")
+
 
 
 # ------ k-means 聚类
