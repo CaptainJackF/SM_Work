@@ -31,14 +31,27 @@ comment <- comment[ ,-c( "Null_1", "Null_2", "Null_3", "Null_5",
 comment[ ,"Comment_date":= as.Date( Comment_time)] # dt[]操作中，不需要加$ 
 dim( comment) # DF 维度
 
-#Wangzhe <- comment[ Game_name == '王者荣耀'] # data.table 的操作，如果用 filter, 会将table 格式转为 frame。
-Wangzhe <- filter( comment, Game_name == "王者荣耀")
-# write.csv( Wangzhe, "王者荣耀.csv")
+# ------ 打标签 > 分词 > 创建于原评论相匹配的df > 分词
 
-# ------ 分词
-library( rJava)
-library( Rwordseg) 
+Wangzhe <- filter( comment, Game_name == "王者荣耀") # 筛选王者荣耀数据
+Wangzhe <- mutate( Wangzhe, index_code = 1:nrow( Wangzhe) ) # 打上标签, index_code
 
+need_sep <- Wangzhe[ ,"Comment"]  # 提取评论数据
+sep_temp <- segmentCN( need_sep) # 分词
+sep_temp_ulist <- unlist( sep_temp) # unlist化，用于提取每一个元素
+
+## 构建与原评论数据相匹配的df
+num_of_words <- as.numeric( lengths( sep_temp)) # 通过分词后的 list，计算list中有多少个元素
+length_of_list <- length( sep_temp) # 
+
+element_df <- data.frame( 
+  index_code = rep( 1:length_of_list, num_of_words), 
+  Char = sep_temp_ulist,
+  Char_num_each = rep( num_of_words, num_of_words),
+  stringsAsFactors = FALSE
+  )
+
+## 加载停用词
 StopWords <-  unlist( 
   read.table(
     "D:\\R_Working_Directory\\Data\\Text\\Stopwords.txt", 
@@ -46,69 +59,70 @@ StopWords <-  unlist(
   )
 ) 
 
-
-need_sep <- Wangzhe[ ,"Comment"]  # 提取评论数据
-sep_temp <- segmentCN( need_sep) # 分词
-
+## Method 1: Using apply and self function to define which “Char” is stopword. Takes 17 secs. Very slow.
+start <- Sys.time()
+element_df_1 <- element_df
 removewords <- function( target_words, stop_words){
-  target_words = target_words[ target_words%in%stop_words==FALSE]
-  return( target_words)
+  return( target_words%in%stop_words )
 }
+element_df_1$is_Stop <- sapply( element_df_1$Char, removewords, StopWords)
+print( Sys.time() - start)
 
-# sapply 可以针对 list做并航运算
-segword2 <- sapply( X = sep_temp, FUN = removewords, StopWords)
+## Method 2: Using merge and df: stopwords to match the stopword. 
+start <- Sys.time()
+element_df_2 <- element_df
+StopWords_df <- data.frame( Char = StopWords, is_Stop = TRUE)
+## element_df_2$is_Stop <- merge( element_df_2, StopWords_df, by.x = "Char",  by.y = "Char",all = TRUE) # 
+print( Sys.time() - start)
+rm( start)
 
 
-words <- sapply( segword2, strsplit," ")  # 
-wordsNum <- tbl_df( as.data.frame( table( unlist( words) ) ) ) %>%
+# 词频统计
+wordsNum <- tbl_df( as.data.frame( table( element_df_1[1:100,]$Char ) ) ) %>% 
   arrange( -Freq)
 names( wordsNum) <- c( "Char", "Freq") # 重命名header
-write.csv( wordsNum, "Game_Analysis\\Need to classfy.csv", row.names = F) # 写出，人工将词意划分为2类
-# 再读入
+## write.csv( wordsNum, "Game_Analysis\\Need to classfy.csv", row.names = F) # 写出，人工将词意划分为2类
+## 再读入
 wordsNum_1 <- tbl_df( fread( 
-  "Game_Analysis\\Need to classfy.csv", 
+  "Need to classfy.csv", 
   sep = ",",
   stringsAsFactors = FALSE, 
   header = TRUE, # TRUE : first line contain column names.
   encoding = "unknown", # default is "unknown".
   data.table = FALSE # TRUE returns a data.table. FALSE returns a data.frame
 ) )
+# Temp <- data.frame( Class = c(-1,0,1), Class_1 = c( "消极", "中性", "积极"), Count = c(1,1,1), stringsAsFactors = FALSE)
+# wordsNum_1 <- merge( wordsNum_1, Temp, by = "Class")
 
-# ------ 概率算法
 Change_to_Class <- function( x){
   return( as.numeric( filter( wordsNum_1, Char == x)[3] ) )
 }
 
-num_of_words <- as.numeric( lengths( words))
-length_of_list <- length( words)
-element <- as.character( unlist( words))
+## Method 1: left join. 不到1秒
+# element_df_1.1 <- merge( element_df_1, wordsNum_1, by = "Char") # 
 
-element_df <- data.frame( 
-  index_code = rep( 1:length_of_list, num_of_words), 
-  Char = element,
-  Char_num_each = rep( num_of_words, num_of_words))
-
-# Method 1: left join. 不到1秒
-element_changed_1 <- merge( element_df, wordsNum_1, by = "Char") # 
-
-# Method 2: apply & function, 将近半分钟
-# element_changed_2 <- element_df
-# element_changed_2$Class <- sapply( element_changed_2$Char, Change_to_Class)
+## Method 2: apply & function, 将近半分钟
+element_df_1.2 <- filter( element_df_1, is_Stop == FALSE)
+element_df_1.2$Class <- sapply( element_df_1.2$Char, Change_to_Class)
+element_df_1.2 <- mutate( element_df_1.2, Class = as.character( Class), Count = 1)
 
 # Calculate the probability.
-results <- tbl_df( element_changed_1) %>% 
-  group_by( index_code, Class_1) %>%
-  select( index_code, Class_1, Char_num_each) %>%
+results <- tbl_df( element_df_1.2) %>% 
+  group_by( index_code, Class) %>%
+  select( index_code, Class, Count) %>%
   summarise(
-    Char_num_each = mean( Char_num_each, na.rm = TRUE)
-)
+    Count = sum( Count, na.rm = TRUE)
+  )
 
 length( table( results$index_code) )
-library( reshape2)
-x <- dcast( results, index_code ~ Class_1, mean, fill = 0)
 
-Wangzhe_result
-x <- merge( Wangzhe_result, dcast( results, index_code ~ Class_1, mean, fill = 0), by = "index_code")
+library( reshape2)
+x <- dcast( results, index_code ~ Class, mean, fill = 0)
+
+x1 <- merge( Wangzhe, x, by.x = "index_code", all.x = TRUE)
+write.csv( x1, "王者荣耀Result.csv", row.names = FALSE)
+
+# ------ 打标签 > 分词 > 创建于原评论相匹配的df > 分词 ------ END
 
 
 
