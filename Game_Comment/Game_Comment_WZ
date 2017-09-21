@@ -40,6 +40,13 @@ need_sep <- Wangzhe[ ,"Comment"]  # 提取评论数据
 sep_temp <- segmentCN( need_sep) # 分词
 sep_temp_ulist <- unlist( sep_temp) # unlist化，用于提取每一个元素
 
+## 剔除短句、刷评论记录
+remove_dusbin <- function( input, percent){
+  return( TRUE %in% (  as.vector(prop.table( table( input)) > percent) ) )
+}
+is_dusbin <- sapply( sep_temp, remove_dusbin, 0.4)
+
+
 ## 构建与原评论数据相匹配的df
 num_of_words <- as.numeric( lengths( sep_temp)) # 通过分词后的 list，计算list中有多少个元素
 length_of_list <- length( sep_temp) # 
@@ -48,6 +55,7 @@ element_df <- data.frame(
   index_code = rep( 1:length_of_list, num_of_words), 
   Char = sep_temp_ulist,
   Char_num_each = rep( num_of_words, num_of_words),
+  is_dusbin = rep( is_dusbin, num_of_words),
   stringsAsFactors = FALSE
   )
 
