@@ -111,6 +111,64 @@ wordcloud2(
 letterCloud( wordsData1[ ,2:3], word ="A", wordSize = 2,color = 'random-dark')
 
 
+# ------ 打标签 > 分词 > 筛选掉短评和刷屏
+## 该部分暂不做词性划分
+
+## 赋值给新变量, 打上标签, index_code
+All_Comment <- mutate( comment, index_code = 1:nrow( comment) ) 
+
+need_sep_All <- All_Comment[ ,"Comment"]  # 提取评论数据
+## 加载相关词库
+installDict("王者荣耀【官方推荐】.scel","Tencent1")
+installDict("腾讯游戏（词库）（第一分库）.scel","Tencent2")
+
+sep_temp_All <- segmentCN( need_sep_All) # 分词, Takes more than 200secs.
+sep_temp_ulist_All <- unlist( sep_temp_All) # unlist化，用于提取每一个元素
+
+## 剔除短句、刷评论记录
+remove_dusbin <- function( input, percent, length_of_comment){
+  # 一下两个条件，满足其一，标记为 TRUE，即垃圾评论。
+  ## 1. 当语句中的某个词在句中占比>= percent 
+  ## 2. 当语句分词后，长度 < length_of_comment
+  return( TRUE %in% (  as.vector( prop.table( table( input)) > percent) ) | sum( table( input)) < length_of_comment )
+}
+
+is_rubbish <- sapply( sep_temp_All, remove_dusbin, 0.15, 20) 
+
+Result <- mutate( All_Comment, is_rubbish = is_rubbish) %>%
+  filter( is_rubbish == FALSE) %>%
+  select( -is_rubbish)
+
+write.csv( Result, "All_Comment_Result.csv", row.names = FALSE)
+
+# ------ 打标签 > 分词 > 筛选掉短评和刷屏 ------ END
+
+
+# ------  This new
+## 构建与原评论数据相匹配的df
+index_code_useful <- Result$index_code
+sep_temp_useful <- sep_temp_All[ index_code_useful] # 根据剔除掉垃圾评论后的df 中的index_code，筛选出原分词后数据
+sep_temp_ulist_useful <- unlist( sep_temp_useful)
+
+num_of_words_useful <- as.numeric( lengths( sep_temp_useful)) # 通过分词后的 list，计算list中有多少个元素
+length_of_list_useful <- length( sep_temp_useful) # 
+
+element_df_useful <- data.frame( 
+  index_code = rep( index_code_useful, num_of_words_useful), 
+  Char_useful = sep_temp_ulist_useful,
+  Char_num_each_useful = rep( num_of_words_useful, num_of_words_useful),
+  stringsAsFactors = FALSE
+)
+
+StopWords <-  unlist( 
+  read.table(
+    "D:\\R_Working_Directory\\Data\\Text\\Stopwords.txt", 
+    stringsAsFactors = FALSE
+  )
+) 
+
+
+# ------    END 
 
 # 抽样
 set.seed(1)
