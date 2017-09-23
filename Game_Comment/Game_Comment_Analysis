@@ -144,6 +144,33 @@ write.csv( Result, "All_Comment_Result.csv", row.names = FALSE)
 # ------ 打标签 > 分词 > 筛选掉短评和刷屏 ------ END
 
 
+# ------ 聚类
+file_useful <- tbl_df( fread( 
+  "All_Comment_Result.csv", 
+  sep = ",",
+  stringsAsFactors = FALSE, 
+  header = TRUE, # TRUE : first line contain column names.
+  encoding = "unknown", # default is "unknown".
+  data.table = FALSE # TRUE returns a data.table. FALSE returns a data.frame
+  )
+)
+## 自定义函数，删除英文&数字。
+Del_Eng_Num <- function( input_text){
+  return( gsub( pattern="[a-z|A-Z|0-9]", "", input_text))
+}
+file_useful$Comment1 <- sapply( file_useful$Comment, Del_Eng_Num)
+
+## 抽样,抽取1/20 的数据做实验
+comment_useful <- file_useful[ sample( 1:nrow( file_useful), nrow( file_useful)/20), ]
+
+## 聚类
+comment_word <- unlist( segmentCN( comment_useful$Comment1))
+comment_word <- segmentCN( comment_useful$Comment1, returnType = "tm")
+
+
+# ------ 聚类 END
+
+
 # ------  This new
 ## 构建与原评论数据相匹配的df
 index_code_useful <- Result$index_code
