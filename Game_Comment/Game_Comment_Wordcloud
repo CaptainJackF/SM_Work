@@ -1,0 +1,142 @@
+# ASO game comment
+
+library( dplyr)
+library( data.table) # load data.table package( `fread` function ) for read csv file. ( solve question 1)
+# library( caret)
+
+# ------- 读取文件&筛选有用信息
+setwd( "D:\\R_Working_Directory\\Data\\Game_Comment")
+#comment <- read.csv("aso_comments_test.csv", header = FALSE, quote = "", stringsAsFactors = FALSE)
+# Question 1: Can not read special character, such as "→", into R.
+
+comment <- fread( 
+  "aso_comments2.csv", 
+  sep = ",",
+  stringsAsFactors = FALSE, 
+  header = FALSE, # TRUE : first line contain column names.
+  encoding = "unknown", # default is "unknown".
+  data.table = TRUE # TRUE returns a data.table. FALSE returns a data.frame
+)
+
+# add col names. 
+names( comment) <- c( "id", "Client", "Store", "Device", "Location", 
+                      "Free", "Game_type", "Null_1", "Game_name", "Null_2",
+                      "Null_3", "Unknow_1", "Comment_title", "User_name", 
+                      "Comment", "Comment_time", "Null_5") 
+
+# 设置key，key 在data.table 中是灵魂一般的存在，设置了 key后，会自动按照key排序
+setkey( comment, Game_type) 
+haskey( comment) # 检验data.table是否存在key
+# 删除列, “-” 与 "!" 功能一样。
+comment <- comment[ ,-c( "Null_1", "Null_2", "Null_3", "Null_5", 
+                         "Client", "Store", "Device", "Location", "Free")]
+# 添加新列，直接用 [] 操作， "New_Col":= function/100 添加计算后的数值或者直接添加数值/字符串
+comment[ ,"Comment_date":= as.Date( Comment_time)] # dt[]操作中，不需要加$ 
+dim( comment) # DF 维度
+
+# 查看新列
+# 对于dft来说，[] 中不用使用$符号即可引用列名，但直接输入列名，则输出的结果会降维(同df).
+# comment[ 1:10, Comment_date] # 
+comment[ 1:10, .( Comment_time, Comment_date)] # 采取list()的方式选取变量则不会， .() 是list()的简写
+
+Wangzhe <- filter( comment, Game_name == "王者荣耀")
+write.csv( Wangzhe, "王者荣耀.csv")
+
+
+# ------ 分词&删除停顿词
+library( rJava)
+library( Rwordseg) # 只有配置了rJava才能安装成功，前者是后者的依赖包。 
+library( RColorBrewer)
+library( wordcloud2)
+
+# 加载停用词
+StopWords <-  unlist( 
+  read.table(
+    "Stopwords.txt", 
+    stringsAsFactors = FALSE
+  )
+) 
+
+removewords <- function( target_words, stop_words){
+  target_words = target_words[ target_words%in%stop_words==FALSE]
+  return( target_words)
+}
+
+com <- comment[ 1:10000, `Comment`] 
+sep_temp <- segmentCN( com) # 分词
+
+# sapply 可以针对 list做并航运算
+segword2 <- sapply( X = sep_temp[1:10], FUN = removewords, StopWords)
+
+words <- lapply( sep_temp, strsplit," ")  
+wordsNum <- table( unlist( words) )  
+wordsNum <- sort( wordsNum) #排序  
+wordsData <- data.frame( words = names( wordsNum), freq = wordsNum)  
+
+colors <- brewer.pal( 8, "Dark2")  
+
+wordsData1 <- wordsData[ ,2:3][ order( -wordsData[ ,2:3]$freq.Freq),]
+
+wordcloud2( 
+  wordsData1, # data: 数据包含具体词语以及频率
+  size = 1,  # size: 字体大小
+  color = "random-light", # color: 字体颜色
+  backgroundColor = 'grey', # backgroundColor: 背景色
+  fontFamily = "微软雅黑", # fontFamily: 字体
+  shape = "circle", # shape: 形状，默认circle
+  minRotation = -pi/4, # 旋转最小角度
+  maxRotation = pi/4, # 旋转最大角度
+  rotateRatio = 0.5  # 字体旋转比例, 设为1则所有字体都旋转
+) 
+
+letterCloud( wordsData1[ ,2:3], word ="A", wordSize = 2,color = 'random-dark')
+
+
+# ------  This new
+## 构建与原评论数据相匹配的df
+index_code_useful <- Result$index_code
+sep_temp_useful <- sep_temp_All[ index_code_useful] # 根据剔除掉垃圾评论后的df 中的index_code，筛选出原分词后数据
+sep_temp_ulist_useful <- unlist( sep_temp_useful)
+
+num_of_words_useful <- as.numeric( lengths( sep_temp_useful)) # 通过分词后的 list，计算list中有多少个元素
+length_of_list_useful <- length( sep_temp_useful) # 
+
+element_df_useful <- data.frame( 
+  index_code = rep( index_code_useful, num_of_words_useful), 
+  Char_useful = sep_temp_ulist_useful,
+  Char_num_each_useful = rep( num_of_words_useful, num_of_words_useful),
+  stringsAsFactors = FALSE
+)
+
+StopWords <-  unlist( 
+  read.table(
+    "D:\\R_Working_Directory\\Data\\Text\\Stopwords.txt", 
+    stringsAsFactors = FALSE
+  )
+) 
+
+
+# ------    END 
+
+# 抽样
+set.seed(1)
+comment_sample_train <- comment[ sample( nrow( comment), 200), ]
+set.seed(6)
+comment_sample_test <- comment[ sample( nrow( comment), 500), ]
+comment_sample <- rbind( comment_sample_train, comment_sample_test)
+
+library( RTextTools)
+library( e1071)
+# build dtm
+matrix <- create_matrix( comment_sample$Comment, language = "Chinese", 
+                      removeStopwords = FALSE, removeNumbers = TRUE, 
+                      stemWords = FALSE) 
+
+# train the model
+mat <- as.matrix( matrix)
+classifier <- naiveBayes( mat[ 1:200,], as.factor( comment_sample_train$Comment) )
+
+# test the validity
+predicted <- predict( classifier, mat[ 201:700,]); predicted
+table( comment_sample_test$Comment, predicted)
+recall_accuracy( comment_sample_test$Comment, predicted)
