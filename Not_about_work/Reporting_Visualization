@@ -1,0 +1,37 @@
+# Reporting Visualization
+library( ggplot2)
+library( dplyr)
+
+dataset <- data.frame(
+  分类 = c( "消息流", "消息流", "广点通"),
+  渠道 = c( "今日头条", "百度feed", "广点通"),
+  充值 = c( 100, 200, 500),
+  消费 = c( 200, 500, 1203)
+)
+dataset <- mutate( dataset, 投产 = 充值 - 消费)
+
+
+p <- ggplot( dataset, aes( 消费, 渠道)) + 
+  geom_point( aes( size = 充值, color = 投产)) + # size 改变点的大小
+  theme_classic( base_size = 10) +
+  
+  geom_text_repel( aes( label = 渠道, fill = 分类), 
+                   color = 'black', size = 3.5) +
+  
+  scale_colour_gradient( low = "#B4464B", high = "#4682B4") + 
+  labs( color = expression( "投产"), size = "充值",  
+       x = "返点后消费金额", 
+       y = "渠道名称",
+       title = "渠道消费情况")
+
+p
+
+ss <- sample(1:32, 15)
+df <- mtcars[ss, ]
+p <- ggplot(df, aes(wt, mpg)) +
+  geom_point(color = 'red') +
+  theme_classic(base_size = 10) +
+  geom_label_repel(aes(label = rownames(df),
+                       fill = factor(cyl)), color = 'white',
+                   size = 3.5) +
+  theme(legend.position = "bottom")
