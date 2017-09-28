@@ -1,0 +1,36 @@
+# All charge dataset write into DB Temp COde, Will used Python to instead it.
+
+library( readxl)
+library( dplyr)
+library( rJava)
+library( RODBC)
+
+## ------ read game and channel from DB.
+MySQL_connect <- odbcConnect("SM_local_DB" , "root" , "Lightning520", DBMSencoding = "UTF-8") # open the gate of Database
+# read game_id info
+game_id <- tbl_df( 
+  sqlQuery( MySQL_connect, 
+            "select gameID, game_full_name from shoumeng_db.game_info",
+            stringsAsFactors = FALSE)
+  )
+# read channel info
+channel <- tbl_df( 
+  sqlQuery( MySQL_connect, 
+            "select channel_code, channel from shoumeng_db.channel_info",
+            stringsAsFactors = FALSE)
+  )
+odbcClose( MySQL_connect) # close the gate
+## ------  END
+
+
+setwd( "F:\\数据分析需求\\2017.09\\2017.09.28 - DB Dataset")
+
+Ori_dataset <- tbl_df( read_excel( "Boss后台最原始数据.xlsx", "纯手盟"))
+
+
+## 匹配 gameID 和 渠道ID，渠道原有的 游戏名和渠道名。
+Ori_dataset <- merge( Ori_dataset, select( game_id, gameID, 游戏名称-新), 
+                      by.x = "统计后台游戏名称" , by.y = "游戏名称-新")
+Ori_dataset <- merge( Ori_dataset, select( channel, 渠道代号, boss后台名称),
+                      by.x = "渠道" , by.y = "boss后台名称")
+
