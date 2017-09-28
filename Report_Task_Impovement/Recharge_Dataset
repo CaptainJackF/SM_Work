@@ -6,7 +6,7 @@ library( rJava)
 library( RODBC)
 
 ## ------ read game and channel from DB.
-MySQL_connect <- odbcConnect("SM_local_DB" , "root" , "Lightning520", DBMSencoding = "UTF-8") # open the gate of Database
+MySQL_connect <- odbcConnect("SM_local_DB" , "" , "", DBMSencoding = "UTF-8") # open the gate of Database
 # read game_id info
 game_id <- tbl_df( 
   sqlQuery( MySQL_connect, 
