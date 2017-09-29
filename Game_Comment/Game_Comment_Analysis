@@ -94,8 +94,9 @@ Del_Eng_Num <- function( input_text){
 }
 file_useful$Comment1 <- sapply( file_useful$Comment, Del_Eng_Num)
 
-## 抽样,抽取1/20 的数据做实验
-comment_useful <- file_useful[ sample( 1:nrow( file_useful), nrow( file_useful)/20), ]
+## 抽样,抽取1/5 的数据做实验
+#comment_useful <- file_useful
+comment_useful <- file_useful[ sample( 1:nrow( file_useful), nrow( file_useful)/5), ]
 
 ## 聚类
 comment_word <- unlist( segmentCN( comment_useful$Comment1))
@@ -127,12 +128,46 @@ tdm_removed <- removeSparseTerms( comment.dtm, 0.9)
 # 转化为矩阵的形式
 comment.matrix <- as.matrix( comment.dtm) 
 
-k <- 5  
+## Methods2: Kmeans 聚类
+k <- 4
 kmeansRes <- kmeans( comment.matrix, k) #k是聚类数  
 mode( kmeansRes) #kmeansRes的内容 
 names( kmeansRes)
 kmeansRes$cluster #聚类结果
 kmeansRes$size #每个类别下有多少条数据
+#sort(kmeansRes$cluster) #对分类情况进行排序
+
+rm( comment.matrix)
+gc()
+## 将聚类结果赋到源数据中
+result <- mutate( comment_useful, K_means = as.character( kmeansRes$cluster))
+write.csv( result, "K_means_results.csv")
+## 1 重复内容极高，非常、喜欢、特别字眼突出
+## 2 & 3 差不多，看词频
+## 4 基本为复制粘贴的网文，歌词
+### ------ Wordcloud 
+mycolors <- brewer.pal(8,"Dark2")
+kmeans_2 <- filter( result, K_means == 2)
+kmeans_2 <- segmentCN( kmeans_2$Comment1)
+kmeans_2 <- sapply( X = kmeans_2, FUN = removewords, StopWords)
+kmeans_2 <- table( unlist( kmeans_2) )
+kmeans_2 <- data.frame( words = names( kmeans_2), freq = kmeans_2, stringsAsFactors = FALSE)  
+kmeans_2 <- kmeans_2[ ,2:3][ order( -kmeans_2[ ,2:3]$freq.Freq),]
+
+wordcloud2( kmeans_2[ kmeans_2$freq.Freq <= 500,] , size = 1, color = "random-light", backgroundColor = 'grey', 
+            fontFamily = "微软雅黑", shape = "circle" )
+
+kmeans_3 <- filter( result, K_means == 3) 
+kmeans_3 <- segmentCN( kmeans_3$Comment1)
+kmeans_3 <- sapply( X = kmeans_3, FUN = removewords, StopWords)
+kmeans_3 <- table( unlist( kmeans_3) )
+kmeans_3 <- data.frame( words = names( kmeans_3), freq = kmeans_3, stringsAsFactors = FALSE)  
+kmeans_3 <- kmeans_3[ ,2:3][ order( -kmeans_3[ ,2:3]$freq.Freq),]
+wordcloud2( kmeans_3[ kmeans_3$freq.Freq <= 500,] , size = 1, color = "random-light", backgroundColor = 'grey', 
+            fontFamily = "微软雅黑", shape = "circle" )
+
+### ------ Wordcloud END
+
 
 # ------ 聚类 END
 
