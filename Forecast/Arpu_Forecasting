@@ -1,0 +1,46 @@
+## ARPU / Recharge Forcast.
+
+library( readxl)
+library( dplyr)
+library( ggplot2)
+library( zoo)
+library( forecast)
+
+setwd( "F:\\数据分析需求\\2017.10\\2017.10.11 - 正统三国目标月流水所需周期&DAU")
+dataset <- read_excel( "20171012【预测模型】正统三国用户规模&日流水预测模型_曾金梅.xlsx",
+            "3.实际数据明细", col_names = TRUE )
+
+dataset <- filter( dataset, `日期` >= '2017-09-01') # 删除正式推广前的数据
+
+## ------ Visual
+DAU_vs_Recharge <- ggplot( dataset, aes( x = `活跃用户`, y = `充值金额`)) +
+  geom_point() + geom_smooth()
+
+date_vs_ARPU <- ggplot( dataset, aes( x = `日期`, y = `活跃ARPU`)) +
+  geom_point() + geom_smooth()
+
+ARPU_TS <- ts( dataset$活跃ARPU, start=1 , frequency= 7)
+plot.ts( ARPU_TS)
+#  离群点处理：取周期内所有周五数值的平均 11.54
+ARPU_TS[29:31] <- c( 11.54, 10.432, 9.472)
+plot.ts( ARPU_TS)
+
+# 一阶差分
+#airlog <- log( airts)
+ARPU_TS_diff <- diff( ARPU_TS, differences=2)
+plot.ts( ARPU_TS_diff )
+
+
+acf( ARPU_TS_diff , lag.max=60 )
+#acf( airdiff , lag.max=60,plot=FALSE) #自相关系数
+pacf( ARPU_TS_diff , lag.max=60 )
+#pacf( airdiff, lag.max=60,plot=FALSE) #偏自相关系数
+
+auto.arima( ARPU_TS_diff ,trace=T)
+
+airarima2 <- arima( ARPU_TS, order=c(2,0,0) , seasonal=list( order=c(0,1,2) , period=7 ) ) 
+x <- predict( airarima2, n.ahead = 20)
+ 
+plot.ts( x$pred)
+
+write.csv( x$pred, "x.csv")
