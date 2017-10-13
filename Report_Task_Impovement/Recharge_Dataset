@@ -22,15 +22,41 @@ channel <- tbl_df(
 odbcClose( MySQL_connect) # close the gate
 ## ------  END
 
-
 setwd( "F:\\数据分析需求\\2017.09\\2017.09.28 - DB Dataset")
 
 Ori_dataset <- tbl_df( read_excel( "Boss后台最原始数据.xlsx", "纯手盟"))
 
+## ------ ShouMeng Only 
+## 匹配 gameID 和 channel_code，渠道原有的 游戏名和渠道名。
+Ori_dataset <- merge( Ori_dataset, game_id, 
+                      by.x = "统计后台游戏名称" , by.y = "game_full_name")
+Ori_dataset <- merge( Ori_dataset, channel,
+                      by.x = "渠道" , by.y = "channel")
 
-## 匹配 gameID 和 渠道ID，渠道原有的 游戏名和渠道名。
-Ori_dataset <- merge( Ori_dataset, select( game_id, gameID, 游戏名称-新), 
-                      by.x = "统计后台游戏名称" , by.y = "游戏名称-新")
-Ori_dataset <- merge( Ori_dataset, select( channel, 渠道代号, boss后台名称),
-                      by.x = "渠道" , by.y = "boss后台名称")
+## Channel_code_modiied, 涉及分类： IOS 外放联运
+channel_SM_sdk <- data.frame( 
+  ori_channel = c("ios苹果商店", "泛舟", "氪金ioscap", "起上", "雪糕", "菠菜",
+    "昊宇联达", "手盟", "iosSS", "指尖", "凡跃", "麒麟", "创星",
+    "创星", "乐游先锋", "云天空", "点智", "29"),
+  
+  channel = c("ios苹果手盟", "泛舟手盟", "氪金ioscap手盟", "起上手盟", "雪糕手盟", "菠菜手盟",
+    "昊宇联达手盟", "应用宝msdk", "iosSS手盟", "指尖手盟", "凡跃手盟", "麒麟手盟", "创星手盟",
+    "创星手盟", "乐游先锋手盟", "云天空手盟", "点智手盟", "29手盟")
+  )
+channel_SM_sdk <- merge( channel_SM_sdk, channel, by = "channel" )
+names( channel_SM_sdk)[3] <- "code_new"
+channel_SM_sdk <- merge( channel_SM_sdk, channel, by.x = "ori_channel" , by.y = "channel")
+names( channel_SM_sdk)[4] <- "code_old"
 
+
+test <- Ori_dataset[12100:12150,]
+
+
+channel_modified <- function( code, df_channel_changed){
+  # 
+  if( code %in% df_channel_changed$code_old ){
+    return( df_channel_changed[ df_channel_changed$code_old == code, ]$code_new )
+  } else {
+    return( code)
+  }
+}
