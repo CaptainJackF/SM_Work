@@ -1,0 +1,107 @@
+library( readxl) ## read excel file
+library( data.table) ## read csv file
+library( dplyr) ## data manipulation
+library( RODBC) ## Database
+#library( ggplot2) ## Visualization
+library( tidyr) ## reshape
+#library( RColorBrewer) ## Color for Plot
+#library( flexdashboard) ## 
+
+setwd( "F:\\Data Analysis Requirement\\2017.11\\2017-11-21 【数据校验】热云")
+load( "register_info_20170101.RData")
+
+
+## Global Var
+start_date <- '2017-06-15'
+end_date <- '2017-11-31'
+
+
+## 查询两份APPID 和 包号的配置表，并合并。
+mysqlgame <- odbcConnect( "game_platform", uid = "data_center", pwd = "sjzxytjhv587")
+reyun_config <- sqlQuery( mysqlgame, 
+                          paste0( 
+                            "SELECT APP_KEY as APPID, PACKAGE_ID FROM game_platform.reyun_config",
+                            " WHERE PACKAGE_ID != '0'"
+                          ), 
+                          stringsAsFactors = FALSE)
+# 构成一条字符串，用于查询包号下的数据
+reyun_package_id <- gsub( " ", "", 
+                          paste( "'", paste( unique( reyun_config$PACKAGE_ID)), "'", collapse = ",")
+)
+odbcClose( mysqlgame) 
+
+
+## 1. 查询热云数据
+## reyun active info reading & data process... 
+# 热云数据集中，用户的设备标识分为两类：IDFA/IMEI，前者IOS后者安卓。
+# 第一步先要将激活用户的设备信息找出，到我们后台匹配相对应的账号。
+# IDFA 
+mysqlbase <- odbcConnect( "mysqlbase", uid = "data_center", pwd = "sjzxytjhv587")
+base_reyun_idfa <- sqlQuery( mysqlbase, 
+                             paste0( 
+                               "SELECT APPID, IDFA, ACTIVE_TIME, CHANNEL",
+                               " FROM base_platform.api_ad_reyun_trackingio",
+                               " WHERE ACTIVE_TIME between '", start_date," 00:00:00' AND '", end_date," 23:59:59' ",
+                               " AND APP_TYPE = 2; "
+                             ), 
+                             stringsAsFactors = FALSE)
+# Delele IDFA == '00000000-0000-0000-0000-000000000000', 这类IDFA 很容易匹配到其他渠道进来的同样的IDFA。
+base_reyun_idfa <- filter( base_reyun_idfa,
+                           IDFA != "00000000-0000-0000-0000-000000000000")
+# select unique DEVICE_CODED for next query.
+reyun_idfa <- gsub( " ", "", 
+                    paste( "'", paste( unique( base_reyun_idfa$IDFA)), "'", collapse = ",")
+)
+# 将channel = '' 的数据，暂时赋值为 "null1"
+base_reyun_idfa[ base_reyun_idfa$CHANNEL == '', ]$CHANNEL <- "null1"
+
+
+#  2. 因为有 6%左右的IDFA是有多条激活记录的
+## 正常的情况是用户用同一个设备在不同的渠道下载了不同的包 - 这类情况完全无影响。
+## 特殊情况是，同一个IDFA，在两个时间段，下载了同一个渠道的同一个包 - 这类情况就需要以最早的激活时间所对应的渠道为准
+base_reyun_idfa <- arrange( base_reyun_idfa, APPID, IDFA, ACTIVE_TIME) %>%
+  distinct( APPID, IDFA, .keep_all = TRUE) %>%  # 保留第一条不重复的记录
+  left_join( reyun_config, by = "APPID" ) %>% # Match the PackageID & GameID
+  # 给每条 IDFA 打上 CHANNEL 和 package_ID 标签，用于追踪手盟设备标识、注册时间、充值。
+  select( APPID, IDFA, CHANNEL, PACKAGE_ID)
+
+# 3. 查询IDFA对应的 手盟设备标识 device_code, 并返回IDFA下的所有账号和ADD_TIME。
+idfa_deviceCode <- sqlQuery( mysqlbase, 
+                             paste0( 
+                               "SELECT distinct IDFA, DEVICE_CODE, LOGIN_ACCOUNT, ADD_TIME",  ## idfa_device 中只有 IDFA 和 device_code，因此只能作为跳板
+                               " FROM base_platform.idfa_device_user",
+                               " WHERE ADD_TIME between '", start_date," 00:00:00' AND '", end_date," 23:59:59' ",
+                               " AND IDFA in (", reyun_idfa, 
+                               #" AND DEVICE_CODE = 'c04556010722c8e2730ec8e296eb651a'",
+                               ") ORDER BY ADD_TIME"
+                             ), 
+                             stringsAsFactors = FALSE)
+# 建立reyun中 idfa&channel 与 device_user 的一一映射，目的是为了追踪 idfa 的注册、充值，并划分渠道。
+# 出现 两个IDFA都指向一个 device_code 的情况，需要对查询出来的数据，按 DEVICE_CODE去重。
+idfa_deviceCode <- distinct( idfa_deviceCode, 
+                             DEVICE_CODE, .keep_all = TRUE)  # 保留第一条不重复的记录
+odbcClose( mysqlbase)
+
+# 4. 将热云数据对碰，利用 Active_time 和 ADD_TIME 的时间差，判定账号所属的IDFA 以及对应Channel
+Login_account_belong <- left_join( idfa_deviceCode, base_reyun_idfa,
+                                   by = c( "IDFA")) %>%
+  mutate( time_diff = abs( ADD_TIME - ACTIVE_TIME)) %>%
+  arrange( APPID, IDFA, CHANNEL, time_diff) %>%
+  distinct( APPID, IDFA, CHANNEL, PACKAGE_ID, LOGIN_ACCOUNT) 
+# 相当于将统一IDFA 下的所有账号(无论device_code是否一致)，全部归到 相对应IDFA 所属的渠道中。
+
+
+start_date <- '2017-08-15'
+end_date <- '2017-08-31'
+# 5. 充值
+# 而统计时间段前注册的账户，未计入在内，因此充值金额会比后台少很多。
+mysqlgame <- odbcConnect( "game_platform", uid = "data_center", pwd = "sjzxytjhv587")
+payment_info <- sqlQuery( mysqlgame, 
+                          paste0( 
+                            "SELECT LOGIN_ACCOUNT, PACKAGE_ID, AMOUNT, PAY_TIME",
+                            " FROM game_platform.payment",
+                            " WHERE PAY_TIME between '", start_date," 00:00:00' AND '", end_date," 23:59:59' ",
+                            " AND PACKAGE_ID in (",
+                            reyun_package_id, ") AND PAY_RESULT = '1'"
+                          ), 
+                          stringsAsFactors = FALSE)
