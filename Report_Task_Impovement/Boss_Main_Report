@@ -1,0 +1,515 @@
+library( readxl) ## read excel file
+library( data.table) ## read csv file
+library( dplyr) ## data manipulation
+library( RODBC) ## Database
+library( ggplot2) ## Visualization
+library( tidyr) ## reshape
+library( RColorBrewer) ## Color for Plot
+
+setwd( "F:\\Data Analysis Requirement\\2017.10\\2017.10.14 - DB Dataset")
+load( "201709.RData")
+load( "201709_1.RData")
+## base1_ad_catagory: spread way
+## base1_dd_app_channel: channel with ad_id, cross with ad_catagory.
+## base1_dd_payway: SM_only
+## base1_games: Game list
+## base1_vw_packages: packagesID, with channel & gameID.
+## base2_detail_game_active: Num of active( LOGIN_ACCOUNT & STATE暂时无意义)
+## base2_detail_game_register: Num of register
+## base2_detail_game_payment: recgarge.
+
+
+## --- Connect Database, Load the dataset above.
+mysqlbase <- odbcConnect( "mysqlbase", uid = "data_center", pwd = "sjzxytjhv587")
+mysqlgame <- odbcConnect( "game_platform", uid = "data_center", pwd = "sjzxytjhv587")
+mysqlsj <- odbcConnect( "mysqlsj", uid = "data_center", pwd = "sjzxytjhv587")
+
+base1_ad_category <- sqlQuery( mysqlgame, 
+                               "SELECT * FROM game_platform.ad_category",  # 推广计划分类
+                               stringsAsFactors = FALSE)
+base1_dd_app_channel <- sqlQuery( mysqlgame, 
+                                  "SELECT * FROM game_platform.dd_app_channel", 
+                                  stringsAsFactors = FALSE)
+base1_dd_payway <- sqlQuery( mysqlgame, 
+                             "SELECT * FROM game_platform.dd_payway", 
+                             stringsAsFactors = FALSE)
+base1_games <- sqlQuery( mysqlgame, 
+                         "SELECT * FROM game_platform.games", 
+                         stringsAsFactors = FALSE)
+base1_vw_packages <- sqlQuery( mysqlgame, 
+                               "SELECT * FROM game_platform.vw_packages", 
+                               stringsAsFactors = FALSE)
+base2_detail_game_active <- sqlQuery( mysqlgame, 
+                                      "SELECT * FROM game_platform.detail_game_active where active_time >= '2017-11-01 00:00:00'", 
+                                      stringsAsFactors = FALSE)
+base2_detail_game_register <- sqlQuery( mysqlgame, 
+                                        "SELECT * FROM game_platform.detail_game_register where register_time >= '2017-11-01 00:00:00'", 
+                                        stringsAsFactors = FALSE)
+base2_detail_game_payment <- sqlQuery( mysqlgame, 
+                                       "SELECT * FROM game_platform.payment where pay_time >= '2017-11-01 00:00:00' AND PAY_RESULT = '1'", 
+                                       stringsAsFactors = FALSE)
+base1_channel_special <- sqlQuery( mysqlbase, 
+                                   "SELECT * FROM base_platform.channel_special", 
+                                   stringsAsFactors = FALSE)
+sdk_Type <- sqlQuery( mysqlbase, 
+                      "SELECT SDK_NAME, SDK_CATEGORY, PAYWAY, SDK_CATEGORY_NAME, PAYWAY_NAME FROM sj_platform.vw_sdk_info3", 
+                      stringsAsFactors = FALSE)
+vw_sdk_info3
+odbcClose( mysqlbase)
+odbcClose( mysqlgame)
+odbcClose( mysqlsj)
+##
+
+
+## 新增&注册数据处理
+{
+  ## --- 新增统计，by packagesID, dereplication by DEVICE_CODE
+  ### base2_detail_game_active
+  active_dataset <- select( base2_detail_game_active,
+                            DEVICE_CODE, GAME_ID, PACKAGES_ID, ACTIVE_TIME) %>%
+    mutate( DATE = as.Date( format( ACTIVE_TIME, "%Y-%m-%d")) ) %>% # 直接用DATE 作为日期变量，方便后续合并数据集
+    ## 原数据中显示CST 格式，直接as.Date 会转化为GMT标准时间，因此部分日期会提前。
+    group_by( GAME_ID, PACKAGES_ID, DATE, DEVICE_CODE) %>%
+    summarise( active = n()) %>%
+    group_by( GAME_ID, PACKAGES_ID, DATE) %>% ## 按设备去重
+    summarise( active = n()) %>%
+    arrange( GAME_ID, PACKAGES_ID, DATE) ## 排序
+}
+
+{
+  ## --- 注册统计，by packagesID, dereplication by DEVICE_CODE
+  {
+    ### base2_detail_game_register
+    register_dataset <- select( base2_detail_game_register,
+                             DEVICE_CODE, GAME_ID, PACKAGES_ID, REGISTER_TIME) %>%
+      mutate( DATE = as.Date( format( REGISTER_TIME, "%Y-%m-%d")) ) %>% # 直接用DATE 作为日期变量，方便后续合并数据集
+      group_by( GAME_ID, PACKAGES_ID, DATE, DEVICE_CODE) %>% 
+      summarise( register_num = n()) %>%
+      group_by( GAME_ID, PACKAGES_ID, DATE) %>%
+      summarise( register_num = sum( register_num), ## 注册数量: 求和即计入所有设备
+                 register_num_dere = n())  %>% ## 去重后的注册数: n() 计数，起到排重效果。
+      arrange( GAME_ID, PACKAGES_ID, DATE)
+  }
+  
+  ## 合并数据集
+  act_reg_dataset <- merge( active_dataset, register_dataset,
+                             by = c( "GAME_ID", "PACKAGES_ID", "DATE"),
+                             all = TRUE)
+  
+  ## 游戏名称 与 渠道名称 匹配
+  ### 匹配前，先将GameID = 0 的数据删除，这部分数据是一些脏数据或者测试数据。
+  {  
+    act_reg_dataset <- filter( act_reg_dataset, GAME_ID != 0)
+    ## Game_Name - base1_game
+    Game_Name <- select( base1_games, ID, CP_GAME_NAME, SM_GAME_NAME)
+    act_reg_dataset <- merge( act_reg_dataset, Game_Name,
+                               by.x = "GAME_ID",
+                               by.y = "ID",
+                               all.x = TRUE)
+  }
+  
+  ## Channel_Name - base1_vw_packages
+  ### 这里需要注意：推广关键词_ **** 等渠道（base1_channel_special），采用的是区间包号，与普通的渠道匹配方法不一致。
+  ### Step1 : 先匹配固定包号部分（PACKAGES_ID < 100000000），直接merge
+  {
+    Channel_Name <- select( base1_vw_packages, PACKAGE_ID, CHANNEL_NAME, CHANNEL_ID)
+    act_reg_dataset_1 <- filter( act_reg_dataset,
+                                  PACKAGES_ID < 100000000)
+    act_reg_dataset_1 <- merge( act_reg_dataset_1, Channel_Name,
+                                 by.x = "PACKAGES_ID",
+                                 by.y = "PACKAGE_ID",
+                                 all.x = TRUE)
+    ### 注意这里有 252条 数据匹配不到相对应的渠道。手工做的时候将其全部归为0渠道，手盟自由，安卓买量。
+    ### 将渠道性质与推广分类(base1_ad_category)合并, 注意AD_ID == 0 的应该是没有在使用的渠道，与本地的配置表对比过，AD_ID == 0的均未出现。
+    names( base1_ad_category) <- c( "AD_ID", "Spread_Way")
+    Channel_Info_1 <- merge( base1_dd_app_channel, base1_ad_category,
+                             by = "AD_ID",
+                             all.x = TRUE)
+    Channel_Info_1 <- select( Channel_Info_1, ID, Spread_Way)
+    act_reg_dataset_1 <- merge( act_reg_dataset_1, Channel_Info_1,
+                                 by.x = "CHANNEL_ID",
+                                 by.y = "ID",
+                                 all.x = TRUE)
+  }
+  
+  ### Step2 : PACKAGES_ID >= 100000000, 使用Cut 函数。
+  {  
+    act_reg_dataset_2 <- filter( act_reg_dataset,
+                                  PACKAGES_ID >= 100000000)
+    Channel_Info_2 <- merge( base1_channel_special, base1_ad_category,
+                             by = "AD_ID",
+                             all.x = TRUE)
+    ### Match Channel name
+    act_reg_dataset_2$CHANNEL_NAME <- cut( act_reg_dataset_2$PACKAGES_ID, 
+                                            breaks = c( Channel_Info_2$PACKAGE_ID_EGT, Inf),
+                                            label = as.character( Channel_Info_2$NAME),
+                                            right = F)
+    ### Match Channel id
+    act_reg_dataset_2$CHANNEL_ID <- cut( act_reg_dataset_2$PACKAGES_ID, 
+                                          breaks = c( Channel_Info_2$PACKAGE_ID_EGT, Inf),
+                                          label = as.character( Channel_Info_2$CHANNEL_ID),
+                                          right = F)
+    ### Match Spread_Way, 理论上特殊渠道都是买量，但是说不准以后会有变更。因此给出if方案，以便于后续发生变化。
+    if( length(table( as.character( Channel_Info_2$Spread_Way))) == 1){
+      act_reg_dataset_2$Spread_Way <- "安卓买量"
+    } else { 
+      act_reg_dataset_2$Spread_Way <- cut( act_reg_dataset_2$PACKAGES_ID, 
+                                            breaks = c( Channel_Info_2$PACKAGE_ID_EGT, Inf),
+                                            label = as.character( Channel_Info_2$Spread_Way),
+                                            right = F)
+    }
+  }
+  ### 合并两个数据集：字段名顺序不同没关系，能够一一匹配就可以rbind
+  act_reg_dataset_final <- rbind( act_reg_dataset_1, act_reg_dataset_2 )
+  act_reg_dataset_final[ is.na( act_reg_dataset_final)] <- 0 
+}
+
+
+## 充值金额（payment）处理
+{
+  ## --- 充值金额统计，by packagesID, payway, dereplication by DEVICE_CODE
+  {
+    ### base2_detail_game_payment
+    payment_dataset <- select( base2_detail_game_payment,
+                               GAME_ID, PACKAGE_ID, PAYWAY, LOGIN_ACCOUNT, PAY_TIME, AMOUNT) %>%
+      mutate( DATE = as.Date( format( PAY_TIME, "%Y-%m-%d")),  # 直接用DATE 作为日期变量，方便后续合并数据集
+              PACKAGES_ID = PACKAGE_ID) %>%  # 数据库汇总命名问题，替换名字包号少了 "S"
+      group_by( GAME_ID, PACKAGES_ID, PAYWAY, LOGIN_ACCOUNT, DATE) %>%
+      summarise( recharge = sum( AMOUNT), num_recharge = n() ) %>%
+      group_by( GAME_ID, PACKAGES_ID, PAYWAY, DATE) %>%
+      summarise( recharge = sum( recharge), num_recharge = n() ) %>%
+      arrange( GAME_ID, PACKAGES_ID, PAYWAY, DATE)
+  }
+  
+  payment_dataset[ is.na( payment_dataset)] <- 0 ## 缺失值处理, 包括渠道，新增:充值 的缺失值。
+  
+  
+  ## Channel_Name - base1_vw_packages
+  ### 这里需要注意：推广关键词_ **** 等渠道（base1_channel_special），采用的是区间包号，与普通的渠道匹配方法不一致。
+  ### Step1 : 先匹配固定包号部分（PACKAGES_ID < 100000000），直接merge
+  {
+    Channel_Name <- select( base1_vw_packages, PACKAGE_ID, CHANNEL_NAME, CHANNEL_ID)
+    payment_dataset_1 <- filter( payment_dataset,
+                                  PACKAGES_ID < 100000000)
+    payment_dataset_1 <- merge( payment_dataset_1, Channel_Name,
+                               by.x = "PACKAGES_ID",
+                               by.y = "PACKAGE_ID",
+                               all.x = TRUE)
+    ### 注意这里有 252条 数据匹配不到相对应的渠道。手工做的时候将其全部归为0渠道，手盟自由，安卓买量。
+    ### 将渠道性质与推广分类(base1_ad_category)合并, 注意AD_ID == 0 的应该是没有在使用的渠道，与本地的配置表对比过，AD_ID == 0的均未出现。
+    names( base1_ad_category) <- c( "AD_ID", "Spread_Way")
+    Channel_Info_1 <- merge( base1_dd_app_channel, base1_ad_category,
+                             by = "AD_ID",
+                             all.x = TRUE)
+    Channel_Info_1 <- select( Channel_Info_1, AD_ID, ID, Spread_Way)  ## 比上面的代码多加了个AD_ID,可能需要利用这个AD 进行匹配。
+    payment_dataset_1 <- merge( payment_dataset_1, Channel_Info_1,
+                                 by.x = "CHANNEL_ID",
+                                 by.y = "ID",
+                                 all.x = TRUE)
+    payment_dataset_1 <- as.data.frame( payment_dataset_1, stringsAsFactor = F)
+  }
+  
+  ### Step2 : PACKAGES_ID >= 100000000, 使用Cut 函数。
+  {  
+    payment_dataset_2 <- filter( payment_dataset,
+                                  PACKAGES_ID >= 100000000)
+    Channel_Info_2 <- merge( base1_channel_special, base1_ad_category,
+                             by = "AD_ID",
+                             all.x = TRUE)
+    ### Match Channel name
+    payment_dataset_2$CHANNEL_NAME <- cut( payment_dataset_2$PACKAGES_ID, 
+                                            breaks = c( Channel_Info_2$PACKAGE_ID_EGT, Inf),
+                                            label = as.character( Channel_Info_2$NAME),
+                                            right = F)
+    ### Match Channel id
+    payment_dataset_2$CHANNEL_ID <- cut( payment_dataset_2$PACKAGES_ID, 
+                                            breaks = c( Channel_Info_2$PACKAGE_ID_EGT, Inf),
+                                            label = as.character( Channel_Info_2$CHANNEL_ID),
+                                            right = F)
+    ### Match Spread_Way, 理论上特殊渠道都是买量，但是说不准以后会有变更。因此给出if方案，以便于后续发生变化。
+    if( length(table( as.character( Channel_Info_2$Spread_Way))) == 1){
+      payment_dataset_2$Spread_Way <- "安卓买量"
+      payment_dataset_2$AD_ID <- 1
+    } else { 
+      payment_dataset_2$Spread_Way <- cut( payment_dataset_2$PACKAGES_ID, 
+                                            breaks = c( Channel_Info_2$PACKAGE_ID_EGT, Inf),
+                                            label = as.character( Channel_Info_2$Spread_Way),
+                                            right = F)
+      payment_dataset_2$AD_ID <- cut( payment_dataset_2$PACKAGES_ID, 
+                                           breaks = c( Channel_Info_2$PACKAGE_ID_EGT, Inf),
+                                           label = as.character( Channel_Info_2$AD_ID),
+                                           right = F)
+    }
+    payment_dataset_2 <- as.data.frame( payment_dataset_2, stringsAsFactor = F)
+  }
+  ### 合并两个数据集：字段名顺序不同没关系，能够一一匹配就可以rbind
+  payment_dataset_final <- rbind( payment_dataset_1, payment_dataset_2 )
+  
+  ## 游戏名称 与 渠道名称 匹配
+  ### 匹配前，先将GameID = 0 的数据删除，这部分数据是一些脏数据或者测试数据。
+  {  
+    payment_dataset_final <- filter( payment_dataset_final, GAME_ID != 0)
+    ## Game_Name - base1_game
+    Game_Name <- select( base1_games, ID, CP_GAME_NAME, SM_GAME_NAME)
+    payment_dataset_final <- merge( payment_dataset_final, Game_Name,
+                                    by.x = "GAME_ID",
+                                    by.y = "ID",
+                                    all.x = TRUE)
+  }
+  
+  ## SDK 分类
+  {
+    payment_dataset_SDK <- merge( payment_dataset_final, sdk_Type,
+                                  by = "PAYWAY",
+                                  all.x = TRUE) %>%
+      select( DATE, recharge, SDK_CATEGORY_NAME ) %>%
+      group_by( DATE, SDK_CATEGORY_NAME) %>%
+      summarise( recharge = sum( recharge)) %>%
+      arrange( DATE, SDK_CATEGORY_NAME)
+  }
+
+  ## By Date, Game_Nmae & Channel 将充值与注册激活合并
+  {
+    payment_dataset_2 <- group_by( payment_dataset_final,
+                                   DATE, SM_GAME_NAME, CHANNEL_NAME, Spread_Way) %>%
+      summarise( recharge = sum( recharge), num_recharge = sum( num_recharge))
+    
+    act_reg_dataset_2 <- select( act_reg_dataset_final, 
+                                 DATE, SM_GAME_NAME, CHANNEL_NAME, Spread_Way,
+                                 active, register_num, register_num_dere)
+    
+    bossMain_dataset_final <- merge( payment_dataset_2, act_reg_dataset_2,
+                                     by = c( "DATE", "SM_GAME_NAME", "CHANNEL_NAME", "Spread_Way"),
+                                     all = TRUE)
+    bossMain_dataset_final[ is.na( bossMain_dataset_final)] <- 0
+  }
+  
+  ## globa var
+  {
+    ## Date
+    max_date <- max( bossMain_dataset_final$DATE)
+    year <- as.numeric( format( max_date, "%Y"))
+    month <- as.numeric( format( max_date, "%m"))
+    day <- as.numeric( format( max_date, "%d"))
+    day_of_month <- as.numeric( format( as.Date( paste0( year,"-", month+1,"-1") )-1 , "%d"))
+    
+    ## Goal
+    Goal_Game <- read.csv( "Goal_Game.csv", header = T, stringsAsFactors = F)
+    names( Goal_Game) <- c( "CP_GAME_NAME", "Game_Name_Cate", "Goal_New", "Goal_recharge", "Department")
+    Goal_SpreadWay <- read.csv( "Goal_SpreadWay.csv", header = T, stringsAsFactors = F)
+    names( Goal_SpreadWay) <- c( "Spread_Way", "Goal_New", "Goal_recharge")
+    Goal <- c( sum( Goal_SpreadWay[,2]), sum(Goal_SpreadWay[,3]))/10000
+    
+    ##
+  }
+}
+
+
+
+## Total
+{
+  Goal <- Goal
+  Curr_Total <- c( sum( bossMain_dataset_final$register_num_dere),sum( bossMain_dataset_final$recharge))/10000
+  Curr_Goal <- Goal*day/day_of_month
+  Total_plot <- data.frame( Type = c( "新增", "充值"),
+                            Current = Curr_Total,
+                            Goal = Goal,
+                            Curr_Goal = Curr_Goal) %>%
+    mutate( `未完成数值(万)` = if_else( Curr_Goal-Current < 0, 0, Curr_Goal - Current),
+            `当月目标(万)` = if_else( Goal-`未完成数值(万)`-Current < 0, 0, Goal-`未完成数值(万)`-Current),
+            `当月实际总值(万)` = Current) %>%
+    select( Type, `当月目标(万)`, `未完成数值(万)`, `当月实际总值(万)`) %>%
+    gather( B, C, -Type, factor_key =TRUE) %>%
+    arrange( Type, B)
+  
+  Gap_New <- round( ( Curr_Total[1]-Curr_Goal[1])/Curr_Goal[1], 4)
+  Gap_Recharge <- round( ( Curr_Total[2]-Curr_Goal[2])/Curr_Goal[2], 4)
+  
+  ggplot( Total_plot, aes( x = Type, y = C, fill = B)) +
+    geom_bar( stat="identity", position="fill") + 
+    coord_flip() +
+    labs( title = paste0( format( Sys.time(), format="%Y年%m月"), "份各推广渠道充值流水")) +
+    theme_bw() ## theme
+  
+  # Total_plot$X <- 0
+  # Total_plot1 <- Total_plot
+  # Total_plot2 <- Total_plot
+  # Total_plot1[ 2,2:4] <- 0
+  # Total_plot2[ 1,2:4] <- 0
+  # Total_plot2[ 2,2:4] <- c( 50,80,70)
+  # 
+  # ggplot( ) +
+  #   geom_bar( data = Total_plot1, aes( x = Type, y = Goal), fill = '#B4B4B4FF', stat="identity") + 
+  #   geom_bar( data = Total_plot1, aes( x = Type, y = Curr_Goal), fill = '#7597B4FF', stat="identity") +
+  #   geom_bar( data = Total_plot1, aes( x = Type, y = Current), fill = '#7597B4FF', stat="identity") +
+  #   geom_bar( data = Total_plot2, aes( x = Type, y = Goal), fill = '#B4B4B4FF', stat="identity") + 
+  #   geom_bar( data = Total_plot2, aes( x = Type, y = Curr_Goal), fill = '#4BB446', stat="identity") +
+  #   geom_bar( data = Total_plot2, aes( x = Type, y = Current), fill = '#7597B4FF', stat="identity") +
+  #   coord_flip() +
+  #   labs( title = paste0( format( Sys.time(), format="%Y年%m月"), "份各推广渠道充值流水")) +
+  #   theme_bw() ## theme
+}
+
+## Spread Way Summary
+{
+  ## 数据处理
+  Spread_Way_S <- group_by( bossMain_dataset_final,
+                            Spread_Way ) %>%
+    summarise( register = sum( register_num_dere), recharge = sum( recharge))
+  Spread_Way_S <- merge( Spread_Way_S, Goal_SpreadWay, by = "Spread_Way")
+  Spread_Way_New <- select( Spread_Way_S,
+                            Spread_Way, register, Goal_New) %>%
+    mutate( Type = "新增",
+            Curr_Goal = Goal_New*day/day_of_month,
+            `未完成数值(万)` = if_else( Curr_Goal-register < 0, 0, (Curr_Goal - register)),
+            `当月目标(万)` = if_else( Goal_New-`未完成数值(万)`-register < 0, 0, Goal_New-`未完成数值(万)`-register),
+            `当月实际总值(万)` = if_else( Goal_New-register < 0, 1, register)) %>%
+    select( Spread_Way, `当月目标(万)`, `未完成数值(万)`, `当月实际总值(万)`) %>%
+    gather( B, C, -Spread_Way, factor_key =TRUE) %>%
+    arrange( Spread_Way, B)
+  
+  Spread_Way_Recharge <- select( Spread_Way_S,
+                            Spread_Way, recharge, Goal_recharge) %>%
+    mutate( Type = "充值",
+            Curr_Goal = Goal_recharge*day/day_of_month,
+            `未完成数值(万)` = if_else( Curr_Goal-recharge < 0, 0, (Curr_Goal - recharge)),
+            `当月目标(万)` = if_else( Goal_recharge-`未完成数值(万)`-recharge < 0, 0, Goal_recharge-`未完成数值(万)`-recharge),
+            `当月实际总值(万)` = if_else( Goal_recharge-recharge < 0, 1, recharge)) %>%
+    select( Spread_Way, `当月目标(万)`, `未完成数值(万)`, `当月实际总值(万)`) %>%
+    gather( B, C, -Spread_Way, factor_key =TRUE) %>%
+    arrange( Spread_Way, B)
+  
+  ## register
+  ggplot( Spread_Way_New, aes( x = Spread_Way, y = C, fill = B)) +
+    geom_bar( stat="identity", position="fill", width = 0.2) + 
+    coord_flip() +
+    labs( title = "新增激活") +
+    theme_bw()+ ## theme
+    scale_fill_brewer( palette = "Greens")
+  
+  ## recharge
+  ggplot( Spread_Way_Recharge, aes( x = Spread_Way, y = C, fill = B)) +
+    geom_bar( stat="identity", position="fill", width = 0.2) + 
+    coord_flip() +
+    labs( title = "充值流水") +
+    theme_bw()+ ## theme
+    scale_fill_brewer( palette = "Blues")
+}
+
+
+## By SM_GAME_NAME
+{
+  GAME_NAME_S <- merge( bossMain_dataset_final, base1_games[ ,8:9], 
+                        by = "SM_GAME_NAME", all.x = TRUE) %>%
+    group_by( CP_GAME_NAME ) %>%
+    summarise( New = sum( register_num_dere), recharge = sum( recharge)) %>%
+    merge(  Goal_Game, by = "CP_GAME_NAME", all.y = T)
+  
+  GAME_NAME_New <- select( GAME_NAME_S,
+                           Game_Name_Cate, Goal_New, New, Department) %>%
+    mutate( Type = "新增",
+            Curr_Goal = Goal_New*day/day_of_month,
+            `未完成数值(万)` = if_else( Curr_Goal - New < 0, 0, (Curr_Goal - New)),
+            `当月目标(万)` = if_else( Goal_New-`未完成数值(万)`- New < 0, 0, Goal_New-`未完成数值(万)`- New),
+            `当月实际总值(万)` = if_else( Goal_New - New < 0, 1, New)) %>%
+    select( Game_Name_Cate, `当月目标(万)`, `未完成数值(万)`, `当月实际总值(万)`) %>%
+    gather( B, C, - Game_Name_Cate, factor_key = TRUE) %>%
+    arrange( Game_Name_Cate, B)
+  
+  GAME_NAME_Recharge <- select( GAME_NAME_S,
+                                Game_Name_Cate, recharge, Goal_recharge) %>%
+    mutate( Type = "充值",
+            Curr_Goal = Goal_recharge*day/day_of_month,
+            `未完成数值(万)` = if_else( Curr_Goal-recharge < 0, 0, (Curr_Goal - recharge)),
+            `当月目标(万)` = if_else( Goal_recharge-`未完成数值(万)`-recharge < 0, 0, Goal_recharge-`未完成数值(万)`-recharge),
+            `当月实际总值(万)` = if_else( Goal_recharge-recharge < 0, 1, recharge)) %>%
+    select( Game_Name_Cate, `当月目标(万)`, `未完成数值(万)`, `当月实际总值(万)`) %>%
+    gather( B, C, - Game_Name_Cate, factor_key = TRUE) %>%
+    arrange( Game_Name_Cate, B)
+  
+  ## register, 由于存在 "联运游戏" 这一目标值，但最新的数据中已经没有这类，因此先做剔除 na 处理
+  ggplot( subset( GAME_NAME_New, !is.na( C)), aes( x = Game_Name_Cate, y = C, fill = B)) +
+    geom_bar( stat = "identity", position = "fill", width = 0.15) + 
+    coord_flip() +
+    labs( title = "新增激活") +
+    theme_bw()+ ## theme
+    scale_fill_brewer( palette = "Greens")
+  
+  ## recharge
+  ggplot( subset( GAME_NAME_Recharge, !is.na( C)), aes( x = Game_Name_Cate, y = C, fill = B)) +
+    geom_bar( stat = "identity", position = "fill", width = 0.15) + 
+    coord_flip() +
+    labs( title = "充值流水") +
+    theme_bw()+ ## theme
+    scale_fill_brewer( palette = "Blues")
+}
+
+
+
+## Key Product
+{
+  ## 数据处理
+  bossMain_by_Spread_Way <- group_by( bossMain_dataset_final,
+                                      DATE, Spread_Way ) %>%
+    summarise( register = sum( register_num_dere), recharge = sum( recharge))
+}
+
+
+## SDK 分类
+{
+  ggplot( payment_dataset_SDK, 
+          aes( x = DATE, y = recharge/10000, color = SDK_Type)) +
+    geom_line( size = 1) + 
+    facet_grid( SDK_Type~., scales = "free") + ## 分面
+    labs( colour = "SDK", ## 图例标题
+          x = "日期",
+          y = "充值流水(万)",
+          title = paste0( "2017", "年", "9", "月份六大SDK充值流水")) +
+    theme_bw() ## theme
+}
+
+
+
+## By Spread_Way
+{
+  ## 数据处理
+  bossMain_by_Spread_Way <- group_by( bossMain_dataset_final,
+                                      DATE, Spread_Way ) %>%
+    summarise( register = sum( register_num_dere), recharge = sum( recharge))
+  
+  ggplot( bossMain_by_Spread_Way, 
+          aes( x = DATE, y = register/10000, color = Spread_Way)) +
+    geom_line( size = 1) + 
+    facet_grid( Spread_Way~., scales = "free") + ## 分面
+    labs( colour = "Spread_Way", ## 图例标题
+          x = "日期",
+          y = "新增激活(万)",
+          title = paste0( "2017", "年", "9", "月份各推广渠道新增激活")) +
+    theme_bw() ## theme
+  
+  ggplot( bossMain_by_Spread_Way, 
+          aes( x = DATE, y = recharge/10000, color = Spread_Way)) +
+    geom_line( size = 1) + 
+    facet_grid( Spread_Way~., scales = "free") + ## 分面
+    labs( colour = "Spread_Way", ## 图例标题
+          x = "日期",
+          y = "充值流水(万)",
+          title = paste0( "2017", "年", "9", "月份各推广渠道充值流水")) +
+    theme_bw() ## theme
+}
+
+
+
+## Checking
+filter( bossMain_dataset_final, SM_GAME_NAME == sample( unique( bossMain_dataset_final$SM_GAME_NAME), 1),
+        DATE >= "2017-09-01", DATE <= "2017-09-30") %>%
+  group_by( DATE, SM_GAME_NAME, CHANNEL_NAME) %>%
+  summarise( active = sum( active),
+             register_num = sum( register_num),
+             register_num_dere = sum( register_num_dere),
+             recharge = sum( recharge)
+  ) %>%
+  arrange( DATE)
+
+
+
