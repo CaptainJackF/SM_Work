@@ -1,0 +1,174 @@
+library( readxl) ## read excel file
+library( data.table) ## read csv file
+library( dplyr) ## data manipulation
+library( RODBC) ## Database
+#library( ggplot2) ## Visualization
+library( tidyr) ## reshape
+#library( RColorBrewer) ## Color for Plot
+#library( flexdashboard) ## 
+
+setwd( "F:\\Data Analysis Requirement\\2017.12\\2017-12-01【数据统计】充值数据划分渠道")
+load( "config_temple - 2017-11-31.RData") ## 加载已经整理好的 Device_Code ,Package_ID 和渠道
+
+## Global Var
+start_date <- '2017-11-31'
+end_date <- '2017-12-31'
+
+
+## 查询新一批数据，处理过后append 进到dc_ry_sm 中，并按照Device_Code ,Package_ID 排重
+mysqlbase <- odbcConnect( "mysqlbase", uid = "data_center", pwd = "sjzxytjhv587")
+mysqlgame <- odbcConnect( "game_platform", uid = "data_center", pwd = "sjzxytjhv587")
+mysqlpp <- odbcConnect( "mysqlpp", uid = "data_center", pwd = "sjzxytjhv587")
+mysqlpy <- odbcConnect( "mysqlpy", uid = "data_center", pwd = "sjzxytjhv587")##查询手盟充值数据
+
+{
+  # 查询热云配置表，关于 IOS APPID 和 对应包号。
+  reyun_config <- sqlQuery( mysqlgame, 
+                            paste0( 
+                              "SELECT APP_KEY as APPID, PACKAGE_ID FROM game_platform.reyun_config",
+                              " WHERE PACKAGE_ID != '0'"
+                            ), 
+                            stringsAsFactors = FALSE)
+  # 构成一条字符串，用于查询包号下的数据
+  reyun_package_id <- gsub( " ", "", 
+                            paste( "'", paste( unique( reyun_config$PACKAGE_ID)), "'", collapse = ",")
+  )
+   
+  ## 查询热云数据
+  # IDFA 
+  base_reyun_idfa <- sqlQuery( mysqlbase, 
+                               paste0( 
+                                 "SELECT APPID, IDFA, ACTIVE_TIME, CHANNEL",
+                                 " FROM base_platform.api_ad_reyun_trackingio",
+                                 " WHERE ACTIVE_TIME between '", start_date," 00:00:00' AND '", end_date," 23:59:59' ",
+                                 " AND APP_TYPE = 2;"
+                               ), 
+                               stringsAsFactors = FALSE)
+  # 删除 IDFA = '00000000-0000-0000-0000-000000000000', 这类IDFA 很容易匹配到其他渠道进来的同样的IDFA。
+  base_reyun_idfa <- filter( base_reyun_idfa,
+                             IDFA != "00000000-0000-0000-0000-000000000000")
+  # select unique DEVICE_CODED for next query.
+  reyun_idfa <- gsub( " ", "", 
+                      paste( "'", paste( unique( base_reyun_idfa$IDFA)), "'", collapse = ",")
+  )
+  base_reyun_idfa <- left_join( base_reyun_idfa, reyun_config, by = "APPID")
+  # 将channel = '' 的数据，暂时赋值为 "null1"
+  #base_reyun_idfa[ base_reyun_idfa$CHANNEL == '', ]$CHANNEL <- ""
+}
+
+
+## 查询手盟激活数据
+{
+  base_sm_active <- sqlQuery( mysqlpp,
+                              paste0(
+                                "SELECT ID,DEVICE_CODE,PACKAGES_ID AS PACKAGE_ID,ACTIVE_TIME",
+                                " FROM pp_platform.detail_game_active",
+                                " WHERE ACTIVE_TIME BETWEEN '",start_date," 00:00:00' AND '",end_date," 23:59:59'",
+                                " AND PACKAGES_ID IN(", reyun_package_id, ")"
+                              ),
+                              stringsAsFactors = FALSE)
+  
+  SQL_active_id <- gsub( " ", "", paste( "'", paste( unique( base_sm_active$ID)), "'", collapse = ","))
+  
+  # 查询IDFA 激活事件
+  base_sm_idfa_act <- sqlQuery( mysqlbase, 
+                                paste0( 
+                                  "SELECT CONTACT_ID AS ID, IDFA",  ## idfa_device 中只有 IDFA 和 device_code，因此只能作为跳板
+                                  " FROM base_platform.idfa_device_user",
+                                  " WHERE FLAG_KEY = 'active'",
+                                  " AND CONTACT_ID in (", SQL_active_id, ")"
+                                ), 
+                                stringsAsFactors = FALSE)
+  ##手盟激活数据匹配idfa
+  base_sm_active <- left_join( base_sm_active, base_sm_idfa_act, by = "ID")
+}
+
+
+## 查询手盟启动数据, startapp为启动app时反馈的数据, startapp 之后才到 active 行为。
+{  
+  base_sm_startapp <- sqlQuery( mysqlpp,
+                                paste0(
+                                  "SELECT ID,DEVICE_CODE,PACKAGE_ID,ACTIVATE_TIME AS ACTIVE_TIME",
+                                  " FROM pp_platform.start_app",
+                                  " WHERE ACTIVATE_TIME BETWEEN '",start_date," 00:00:00' AND '",end_date," 23:59:59'",
+                                  " AND PACKAGE_ID IN(", reyun_package_id,")"),
+                                stringsAsFactors = FALSE)
+  SQL_startapp_id <- gsub( " ", "",
+                           paste( "'", paste( unique( base_sm_startapp$ID)), "'", collapse = ","))
+  
+  ##查询手盟idfa_device启动事件
+  base_sm_idfa_startapp <- sqlQuery( mysqlbase, 
+                                     paste0( 
+                                       "SELECT CONTACT_ID AS ID,IDFA",  
+                                       " FROM base_platform.idfa_device_user",
+                                       " WHERE FLAG_KEY = 'start_app'",
+                                       " AND CONTACT_ID IN(", SQL_startapp_id, ")"
+                                     ),
+                                     stringsAsFactors = FALSE)
+  ##手盟启动数据匹配idfa
+  base_sm_startapp <- left_join( base_sm_startapp, base_sm_idfa_startapp, by = "ID")
+}
+
+
+## 启动和激活数据合并, 查询两份数据的意义在于担心某一部分数据有遗漏，两份数据合并后排重，双保险。
+dc_sm_idfa <- bind_rows( base_sm_active, base_sm_startapp) %>%
+  # filter( !is.na( IDFA)) %>%  # 这一步可以省略，因为下一步对IDFA 做筛选时，NA 所在的行，判断结果为NA，也会被筛选掉。
+  filter( IDFA != "00000000-0000-0000-0000-000000000000") %>%
+  arrange( IDFA, ACTIVE_TIME) %>%
+  distinct( IDFA, PACKAGE_ID, DEVICE_CODE, .keep_all = TRUE)
+
+#热云idfa关联手盟DEVICE_CODE
+dc_reyun_sm <- left_join( base_reyun_idfa, dc_sm_idfa, by = c( "PACKAGE_ID", "IDFA")) %>%
+  filter( !is.na( DEVICE_CODE) & CHANNEL != "null") %>%
+  mutate( diff = abs( round( difftime( ACTIVE_TIME.x, ACTIVE_TIME.y, units = "mins"), 2)) ) %>%
+  filter( diff <= 1440) %>% 
+  distinct( dc_reyun_sm_full, PACKAGE_ID, DEVICE_CODE, CHANNEL) # 做为配置表
+
+
+# 排重,
+x <- bind_rows( dc_ry_sm, dc_reyun_sm ) %>%
+  distinct( PACKAGE_ID, DEVICE_CODE, CHANNEL, .keep_all = TRUE)
+
+
+# Payment
+payment_info <- sqlQuery( mysqlpy, 
+                          paste0( 
+                            "SELECT LOGIN_ACCOUNT, ORDER_ID, GAME_ID, PACKAGE_ID, AMOUNT, PAY_TIME",
+                            " FROM py_platform.payment",
+                            " WHERE PAY_TIME between '", start_date," 00:00:00' AND '", end_date," 23:59:59' ",
+                            " AND PACKAGE_ID in (",
+                            reyun_package_id, ") AND PAY_RESULT = '1'"
+                          ), 
+                          stringsAsFactors = FALSE)
+# 测试用
+payment_info_selected <- filter( payment_info, PACKAGE_ID == '9090099')
+SQL_LOGIN_ACCOUNT <- gsub( " ", "", 
+                           paste( "'", paste( unique( payment_info_selected$LOGIN_ACCOUNT)), "'", collapse = ","))
+
+# 注册信息
+register_info <- sqlQuery( mysqlpp, 
+                           paste0( 
+                             "SELECT DEVICE_CODE,LOGIN_ACCOUNT",
+                             " FROM pp_platform.p_user",
+                             " WHERE LOGIN_ACCOUNT in (",
+                             SQL_LOGIN_ACCOUNT, ")"
+                           ), 
+                           stringsAsFactors = FALSE)
+
+##充值数据匹配注册信息
+dc_payment <- left_join( payment_info_selected, 
+                         register_info, by = "LOGIN_ACCOUNT") %>%
+  left_join( dc_ry_sm, 
+             by = c( "PACKAGE_ID", "DEVICE_CODE")) %>%
+  mutate( paydate = as.Date( format( PAY_TIME, "%Y-%m-%d")))
+
+num_pay <- group_by( dc_payment,
+                     GAME_ID, PACKAGE_ID, CHANNEL, paydate) %>%
+  summarise( AMOUNT = sum( AMOUNT)) %>%
+  left_join( reyun_config, by = "PACKAGE_ID")
+
+
+odbcClose( mysqlbase)
+odbcClose( mysqlgame)
+odbcClose( mysqlpp) 
+odbcClose( mysqlpy) 
