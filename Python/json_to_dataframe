@@ -1,0 +1,31 @@
+# -- encoding: UTF-8 --
+
+import pandas as pd
+import numpy as np 
+import os
+import json
+
+os.chdir( 'F:/Data Analysis Requirement/2018.01/2018-01-03【数据统计】《SDK数据提取》（产品设计部部）20180103')
+#df = pd.read_table( '20171201.log', header = None)
+
+
+
+file_list = os.listdir( os.getcwd() + '/imei_device_user/201707-12' )
+
+for filename in file_list:
+
+	#print( os.getcwd() + '/imei_device_user/201707-12/' +  filename)
+
+	## 创建一个空的 dataframe, 与R 不同的是，必须要先设定好colnames
+	df = pd.DataFrame( columns = [ "ID", "CONTACT_ID", "ADD_TIME", "IMEI", "DEVICE_CODE", "LOGIN_ACCOUNT", "SDK_VERSION", "FLAG_KEY"])
+	file = open( os.getcwd() + '/imei_device_user/201707-12/' +  filename, 'r')  ## 打开文件
+
+	for line in file.readlines():  ## .readlines 为一次性全部读取文件的每一行
+		## json.loads: 解码json格式为 dict格式; pd.DataFrame: 变为数据框; index=[0]
+	    dic = json.loads( line)
+	    if dic['FLAG_KEY'] == 'active': 
+	    	df = df.append( pd.DataFrame( dic, index = [0]) )  ## 往 df 中追加 dic数据.
+	    
+	df.to_csv(  os.getcwd() + '/IMEI_Q3-4/' + filename + '.csv', index = False)
+	print( filename + ', Finished!')
+	# data = pd.read_json( '20171201.txt', typ = 'frame')  #方法二
