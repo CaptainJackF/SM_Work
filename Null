@@ -1,0 +1,227 @@
+## 分SDK 版本导出数据
+
+library( readxl) ## read excel file
+library( data.table) ## read csv file
+library( dplyr) ## data manipulation
+library( RODBC) ## Database
+library( tidyr) ## reshape
+
+setwd( "F:\\Data Analysis Requirement\\2018.01\\2018-01-03【数据统计】《SDK数据提取》（产品设计部部）20180103")
+
+## Global Var
+start_date <- '2017-06-01'
+end_date <- '2017-12-31'
+
+## bridge of R and Database
+mysqlbase <- odbcConnect( "mysqlbase", uid = "data_center", pwd = "sjzxytjhv587")  ## idfa&imei 信息& SDK_VERSION
+mysqlpp <- odbcConnect( "mysqlpp", uid = "data_center", pwd = "sjzxytjhv587")      ## 激活信息
+mysqlgame <- odbcConnect( "game_platform", uid = "data_center", pwd = "sjzxytjhv587")  ## 注册信息
+
+## 包号对应推广分类归属
+package_spread_type <- sqlQuery( mysqlgame,
+                             paste0(
+                               "SELECT PACKAGE_ID, MARKET_NAME FROM `vw_packages_gc` where PLATFORM_NAME = 'ios';"
+                             ),
+                             stringsAsFactors = FALSE)
+
+## loop reading .csv file
+file_list <- list.files( ".\\IDFA_Q3-4\\Q4")
+
+idfa_dataset <- data.frame()
+
+for( i in file_list){
+  temp_file <- read.csv( paste0( getwd(), "\\IDFA_Q3-4\\Q4\\", i),
+                         stringsAsFactors = F, header = T)
+  idfa_dataset <- rbind( idfa_dataset, temp_file)
+  remove( temp_file)
+}
+
+idfa_dataset <- mutate( idfa_dataset,
+                        ID = CONTACT_ID) %>%
+  select( ID, ADD_TIME, IDFA, DEVICE_CODE, SDK_VERSION, FLAG_KEY)
+##-----------------------
+
+## IOS Client
+idfa_dataset_df <- sqlQuery( mysqlbase,
+                      paste0(
+                        "SELECT CONTACT_ID as ID, ADD_TIME, IDFA, DEVICE_CODE, SDK_VERSION, FLAG_KEY ",
+                        " FROM idfa_device_user",
+                        " WHERE ADD_TIME BETWEEN '2017-12-29 00:00:00' AND '2017-12-31 23:59:59'",
+                        " AND FLAG_KEY = 'active';"
+                      ),
+                      stringsAsFactors = FALSE)
+
+idfa_dataset <- rbind( idfa_dataset, idfa_dataset_df)
+
+## 因为android用户经常清理缓存, 会导致新增行为重复回传并记录。因此需要根据 device_code 排重，保留最早的SDK_VERSION即可
+idfa_dataset <- distinct( idfa_dataset, DEVICE_CODE, .keep_all = TRUE) %>%
+  distinct( idfa_dataset, IDFA, .keep_all = TRUE)
+
+ios_active_id <- gsub( " ", "", 
+                              paste( "'", paste( unique( idfa_dataset$ID)), "'", collapse = ","))
+
+## 查询ios激活信息
+ios_active_dataset <- sqlQuery( mysqlpp,
+                                paste0(
+                                  "SELECT ID, DEVICE_CODE, PACKAGES_ID AS PACKAGE_ID, ACTIVE_TIME",
+                                  " FROM pp_platform.detail_game_active",
+                                  " WHERE ACTIVE_TIME BETWEEN '2017-10-01 00:00:00' AND '2017-12-31 23:59:59'",
+                                  " AND ID IN(", ios_active_id, ")"
+                                ),
+                                stringsAsFactors = FALSE)
+
+ios_active_device_code <- gsub( " ", "", 
+                                paste( "'", paste( unique( ios_active_dataset$DEVICE_CODE)), "'", collapse = ","))
+
+## 匹配SDK 版本号
+ios_active_dataset <- left_join( ios_active_dataset, idfa_dataset,
+                                 by = c( "ID", "DEVICE_CODE")) %>%
+  select( DEVICE_CODE, SDK_VERSION, PACKAGE_ID, ACTIVE_TIME)
+
+## ios 注册信息
+ios_register_dataset <- sqlQuery( mysqlpp, 
+                                  paste0( 
+                                    "SELECT DEVICE_CODE, LOGIN_ACCOUNT, PACKAGE_ID, REGISTER_TIME",
+                                    " FROM pp_platform.p_user",
+                                    " WHERE REGISTER_TIME BETWEEN '2017-10-01 00:00:00' AND '2017-12-31 23:59:59'",
+                                    " AND DEVICE_CODE in (", ios_active_device_code, ")"
+                                  ), 
+                                  stringsAsFactors = FALSE)
+## 匹配SDK 版本号
+ios_register_dataset <- left_join( ios_register_dataset, idfa_dataset,
+                                   by = "DEVICE_CODE") %>%
+  select( DEVICE_CODE, SDK_VERSION, PACKAGE_ID,LOGIN_ACCOUNT, REGISTER_TIME)
+
+
+## ios端数据统计
+ios_active <- left_join( ios_active_dataset, package_spread_type,
+                         by = "PACKAGE_ID") %>%
+  filter( MARKET_NAME != "ios外放联运") %>%
+  mutate( Client = 'ios',
+          Quarter = trunc( month( ACTIVE_TIME )/3.1 + 1,0)) %>%
+  group_by( Client, Quarter, SDK_VERSION) %>%
+  summarise( active_num = n())
+## 判断以 '299' 结尾很简单，但是不以 299结尾很复杂。
+## 因为返回的是逻辑值，因此对正则判断后再做逻辑判断即可筛选不以 299结尾的集合。
+
+
+ios_register <- left_join( ios_register_dataset, package_spread_type,
+                           by = "PACKAGE_ID") %>%
+  filter( MARKET_NAME != "ios外放联运") %>%
+  mutate( Client = 'ios',
+          Quarter = trunc( month( REGISTER_TIME )/3.1 + 1,0)) %>%
+  group_by( Client, Quarter, SDK_VERSION, DEVICE_CODE) %>%
+  summarise( reg_num = n()) %>%
+  group_by( Client, Quarter, SDK_VERSION) %>%
+  summarise( reg_num = sum( reg_num), device_reg_num = n())
+
+## 清缓存
+rm( idfa_dataset, ios_active_id,
+    ios_active_dataset, ios_active_device_code,
+    ios_register_dataset )
+gc()
+
+## 合并激活&注册数据集
+ios_data <- left_join( ios_active, ios_register,
+                       by = c( "Client", "Quarter", "SDK_VERSION")) %>%
+  mutate( rate_of_device_reg = round( device_reg_num/active_num, 5))
+
+write.csv( ios_data,
+           "ios_sdk_data_Q3.csv",
+           row.names = FALSE)
+## -------------------------------------
+
+file_list <- list.files( ".\\IDFA_Q3-4")
+
+imei_dataset <- data.frame()
+
+for( i in file_list){
+  temp_file <- read.csv( paste0( getwd(), "\\IMEI_Q3-4\\", i),
+                         stringsAsFactors = F, header = T)
+  imei_dataset <- rbind( imei_dataset, temp_file)
+  remove( temp_file)
+}
+
+## Android Client
+imei_dataset <- sqlQuery( mysqlbase,
+                          paste0(
+                            "SELECT CONTACT_ID as ID, ADD_TIME, IMEI, DEVICE_CODE, SDK_VERSION, FLAG_KEY ",
+                            " FROM imei_device_user",
+                            " WHERE ADD_TIME BETWEEN '2017-12-01 00:00:00' AND '2017-12-31 23:59:59'",
+                            " AND FLAG_KEY = 'active';"
+                          ),
+                          stringsAsFactors = FALSE)
+
+## 因为android用户经常清理缓存, 会导致新增行为重复回传并记录。因此需要根据 device_code 排重，保留最早的SDK_VERSION即可
+imei_dataset <- distinct( imei_dataset, DEVICE_CODE, .keep_all = TRUE)
+
+android_active_id <- gsub( " ", "", 
+                       paste( "'", paste( unique( imei_dataset$ID)), "'", collapse = ","))
+
+## 查询激活信息
+android_active_dataset <- sqlQuery( mysqlpp,
+                                paste0(
+                                  "SELECT ID, DEVICE_CODE, PACKAGES_ID AS PACKAGE_ID, ACTIVE_TIME",
+                                  " FROM pp_platform.detail_game_active",
+                                  " WHERE ACTIVE_TIME BETWEEN '2017-12-01 00:00:00' AND '2017-12-31 23:59:59'",
+                                  " AND ID IN(", android_active_id, ")"
+                                ),
+                                stringsAsFactors = FALSE)
+
+android_active_device_code <- gsub( " ", "", 
+                                paste( "'", paste( unique( android_active_dataset$DEVICE_CODE)), "'", collapse = ","))
+
+## 匹配SDK 版本号
+android_active_dataset <- left_join( android_active_dataset, imei_dataset,
+                                     by = c( "ID", "DEVICE_CODE")) %>%
+  select( DEVICE_CODE, SDK_VERSION, PACKAGE_ID, ACTIVE_TIME)
+
+android_register_dataset <- sqlQuery( mysqlpp, 
+                                  paste0( 
+                                    "SELECT DEVICE_CODE, LOGIN_ACCOUNT, PACKAGE_ID, REGISTER_TIME",
+                                    " FROM pp_platform.p_user",
+                                    " WHERE REGISTER_TIME BETWEEN '2017-12-01 00:00:00' AND '2017-12-31 23:59:59'",
+                                    " AND DEVICE_CODE in (", android_active_device_code, ")"
+                                  ), 
+                                  stringsAsFactors = FALSE)
+
+android_register_dataset <- left_join( android_register_dataset, imei_dataset,
+                                     by = c( "DEVICE_CODE")) %>%
+  select( DEVICE_CODE, SDK_VERSION, PACKAGE_ID, REGISTER_TIME)
+
+## android端数据统计
+android_active <- mutate( android_active_dataset,
+                          Client = 'android',
+                          Quarter = trunc( month( ACTIVE_TIME )/3.1 + 1,0)) %>%
+  group_by( Client, Quarter, SDK_VERSION) %>%
+  summarise( active_num = n())
+
+
+android_register <- mutate( android_register_dataset, 
+                            Client = 'android',
+                            Quarter = trunc( month( REGISTER_TIME )/3.1 + 1,0)) %>%
+  group_by( Client, Quarter, SDK_VERSION, DEVICE_CODE) %>%
+  summarise( reg_num = n()) %>%
+  group_by( Client, Quarter, SDK_VERSION) %>%
+  summarise( reg_num = sum( reg_num), device_reg_num = n())
+
+## 清缓存
+rm( imei_dataset, android_active_id,
+    android_active_dataset, android_active_device_code,
+    android_register_dataset )
+gc()
+
+## 合并激活&注册数据集
+android_data <- left_join( android_active, android_register,
+                       by = c( "Client", "Quarter", "SDK_VERSION")) %>%
+  mutate( rate_of_device_reg = round( device_reg_num/active_num, 5))
+
+write.csv( android_data,
+           "android_sdk_data_Dec.csv",
+           row.names = FALSE)
+
+## ruin the Bridge
+odbcClose( mysqlbase)
+odbcClose( mysqlgame)
+odbcClose( mysqlpp) 
+
