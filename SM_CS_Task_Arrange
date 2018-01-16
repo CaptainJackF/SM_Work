@@ -1,0 +1,150 @@
+## 客服部班表优化
+
+library( readxl) ## read excel file
+library( data.table) ## read csv file
+library( dplyr) ## data manipulation
+library( tidyr) ## reshape
+
+setwd( "F:\\Data Analysis Requirement\\2018.01\\2018-01-11【模板设计】客服部班表优化")
+
+goal_task <- c("A", "B", "C")
+
+customer_service <- read_excel( "2018年1月班表普客(coding).xlsx",
+                                sheet = "Sheet1",
+                                col_names = TRUE)
+
+position <- which( customer_service == "姓名" , arr.ind = TRUE) 
+position_row <- as.numeric( position[ , 1] )
+position_col <- as.numeric( position[ , 2] )  # lock the last day
+
+position_end_row <- max( which( customer_service == "客服" , arr.ind = TRUE)[ ,1 ])
+
+position_end_col <- max( which( customer_service == "休息天数" , arr.ind = TRUE)[ ,2])
+
+header_name <- c( "Name", as.character( seq( 1:31)))
+customer_service1 <- customer_service[ ( position_row+2):(position_end_row-2), position_col:( position_end_col-1)]
+names( customer_service1) <- header_name
+
+## testing
+
+t1 <- customer_service1[ , c(1,7)] %>%
+  arrange( `6`)
+
+## 早班
+first <- filter( t1, `6` == 'A1')
+first_arrange <- permutations( nrow( first))
+first_arrange <- first_arrange[ sample( ncol( first_arrange), 1),]
+if( max( first_arrange) == 1){
+  first <- mutate( first, 
+                   x = "A+B")
+} else {
+  first <- mutate( first, 
+                   x = first_arrange)
+}
+
+## 晚班
+last <- filter( t1, `6` == 'C1' | `6` == 'B2')
+last_arrange <- permutations( nrow( last))
+last_arrange <- last_arrange[ sample( ncol( last_arrange), 1),]
+if( max( last_arrange) == 1){
+  ## 晚班安排一个人的几率很多小. 
+  last <- mutate( last, 
+                  x = "A+B")
+} else if( max( last_arrange) == 2) {
+  last <- mutate( last, 
+                  x = last_arrange)
+} else if( max( last_arrange) >= 3){
+  last <- mutate( last, 
+                  x = ifelse( last_arrange >= 3, 1, last_arrange))
+}
+
+
+## middle_arrange 
+middle_1 <- filter( t1, `6` == 'A2' | `6` == 'C')
+middle_1_arrange <- permutations( nrow( middle_1))
+middle_1_arrange <- middle_1_arrange[ sample( ncol( middle_1_arrange), 1),]
+
+## 2/B 是否已经安排
+if( TRUE %in% (c( 2, "B") %in% first$x)) {
+  
+  ## 2/B已存在, 是否middle1 时间段仅有一位同事上班
+  if( max( middle_1_arrange) == 1){
+    
+    ## middle1时间段仅有 1位同事上班, 是否已经安排A
+    if( TRUE %in% (c( 1, "A") %in% first$x)){
+      ## A已存在, 则middle1 时间段上班的同事去处理 C.
+      middle_1 <- mutate( middle_1, 
+                          x = 3)
+    } else{ 
+      ## A 不存在, 则middle1 时间段上班的同事去处理 A.
+      middle_1 <- mutate( middle_1, 
+                          x = 1)
+    }
+  ## middle1时间段仅有 2位以上同事上班
+  } else {
+    ## 则按照抽样规则排班, 
+    middle_1 <- mutate( middle_1, 
+                        x = ifelse( middle_1_arrange == 2, 3, 1))
+  }
+## 2/B 不存在.( 可能性极低, 因为 first 中优先安排 2/B工作.)  
+} else{
+  
+  ## 2/B不存在, 是否middle1 时间段仅有一位同事上班
+  if( max( middle_1_arrange) == 1){
+    
+    ## middle1时间段仅有 1位同事上班, 处理 B.
+    middle_1 <- mutate( middle_1, 
+                        x = 2)
+  ## middle1时间段仅有 2位以上同事上班
+  } else{
+    ## 则按照抽样规则排班, 
+    middle_1 <- mutate( middle_1, 
+                        x = ifelse( middle_1_arrange > 3, 1, middle_1_arrange))
+  }
+    
+}
+
+
+middle_2 <- filter( t1, `6` == 'B1') 
+middle_2_arrange <- permutations( nrow( middle_2))
+middle_2_arrange <- middle_2_arrange[ sample( ncol( middle_2_arrange), 1),]
+if( TRUE %in% (c( 2, "B") %in% last$x)) {
+  
+  ##
+  if( max( middle_2_arrange) == 1){
+    ##
+    if( TRUE %in% (c( 3, "C") %in% middle_1$x)){
+      middle_2 <- mutate( middle_2, 
+                          x = 1)
+    } else{ 
+      middle_2 <- mutate( middle_2, 
+                          x = 3)
+    }
+  } else if( max( middle_2_arrange) >= 2){
+    
+    if( TRUE %in% (c( 3, "C") %in% middle_1$x)){
+      middle_2 <- mutate( middle_2, 
+                          x = 1)
+    } else{
+      middle_2 <- mutate( middle_2, 
+                          x = ifelse( middle_2_arrange == 1, 3, 1))
+    }
+   
+  }
+} else{
+  
+  if( max( middle_2_arrange) == 1){
+    middle_2 <- mutate( middle_2, 
+                        x = 2)
+  } else{
+    middle_2 <- mutate( middle_2, 
+                        x = ifelse( middle_2_arrange > 3, 1, middle_2_arrange))
+  }
+  
+}
+
+rest <-  filter( t1, `6` == 'R') %>%
+  mutate( x = 0)
+
+rbind( first, middle_1, middle_2, last, rest)
+
