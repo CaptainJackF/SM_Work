@@ -1,0 +1,26 @@
+{
+  ### Step1 : 先匹配固定包号部分（PACKAGES_ID < 100000000），直接merge
+  {
+    register_info_1 <- filter( register_info,
+                               PACKAGE_ID < 100000000)
+    register_info_1 <- left_join( register_info_1, base1_vw_packages,
+                                  by = "PACKAGE_ID")
+  }
+  
+  ### Step2 : PACKAGES_ID >= 100000000, 使用Cut 函数。
+  {  
+    register_info_2 <- filter( register_info,
+                               PACKAGE_ID >= 100000000)
+
+    ### Match Channel name
+    register_info_2$CHANNEL_NAME <- cut( register_info_2$PACKAGE_ID, 
+                                         breaks = c( base1_channel_special$PACKAGE_ID_EGT, Inf),
+                                         label = as.character( base1_channel_special$NAME),
+                                         right = F)
+    
+  }
+  
+  ## 合并两个数据集：字段名顺序不同没关系，能够一一匹配就可以rbind
+  register_info_final <- rbind( register_info_1, register_info_2 ) 
+  
+}
