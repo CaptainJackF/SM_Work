@@ -4,12 +4,13 @@ library( readxl) ## read excel file
 library( data.table) ## read csv file
 library( dplyr) ## data manipulation
 library( tidyr) ## reshape
+library( e1071)
 
-setwd( "F:\\Data Analysis Requirement\\2018.01\\2018-01-11【模板设计】客服部班表优化")
+setwd( "F:\\...")
 
 goal_task <- c("A", "B", "C")
 
-customer_service <- read_excel( "2018年1月班表普客(coding).xlsx",
+customer_service <- read_excel( "....xlsx",
                                 sheet = "Sheet1",
                                 col_names = TRUE)
 
@@ -21,13 +22,15 @@ position_end_row <- max( which( customer_service == "客服" , arr.ind = TRUE)[ 
 
 position_end_col <- max( which( customer_service == "休息天数" , arr.ind = TRUE)[ ,2])
 
-header_name <- c( "Name", as.character( seq( 1:31)))
-customer_service1 <- customer_service[ ( position_row+2):(position_end_row-2), position_col:( position_end_col-1)]
-names( customer_service1) <- header_name
+header_name <- c( "Name", as.character( seq( 1:( position_end_col-position_col-1))))
+customer_service <- customer_service[ ( position_row+2):(position_end_row-2), position_col:( position_end_col-1)]
+names( customer_service) <- header_name
 
-## testing
+customer_service$Name <- factor( 1:nrow( customer_service), labels = customer_service$Name)
 
-Task_arrange <- function( data, column){
+Task_arrange <- function( data, day_of_month){
+  
+  day_of_month <- day_of_month
   
   first_class <- "A1"
   middle_1_class <- c( "A2", "C")
@@ -35,13 +38,25 @@ Task_arrange <- function( data, column){
   last_class <- c( "B2", "C1")
   rest_class <- "R"
   
-  current_col <- header_name[2]
-  t1 <- customer_service1[ , c( "Name", current_col)] %>%
-    arrange( current_col)
+
+  t1 <- data[ , c( "Name", day_of_month)]
+  names( t1)[2] <- "Arrange"
   
+  
+  first <- filter( t1, Arrange == first_class) ## 早班
+  last <- filter( t1, Arrange %in% last_class) ## 晚班
+  middle_1 <- filter( t1, Arrange %in% middle_1_class)  ## 0900AM上班
+  middle_2 <- filter( t1, Arrange %in% middle_2_class)  ## 1230PM上班
+  rest <-  filter( t1, Arrange == rest_class) %>%  ## 休息
+    mutate( x = "R")
+  
+  on_duty_first <- nrow( first)
+  on_duty_last <- nrow( last)
+  on_duty_middle_1 <- nrow( middle_1)
+  on_duty_middle_2 <- nrow( middle_2)
+  on_duty_num <- on_duty_first+ on_duty_last+ on_duty_middle_1+ on_duty_middle_2
   
   ## 早班
-  first <- filter( t1, `1` == first_class)
   first_arrange <- permutations( nrow( first))
   first_arrange <- first_arrange[ sample( ncol( first_arrange), 1),]
   if( max( first_arrange) == 1){
@@ -49,62 +64,64 @@ Task_arrange <- function( data, column){
                      x = "A+B")
   } else {
     first <- mutate( first, 
-                     x = first_arrange)
+                     x = ifelse( first_arrange >= 3, 1, first_arrange))
   }
   
   ## 晚班
-  last <- filter( t1, `1` %in% last_class)
   last_arrange <- permutations( nrow( last))
   last_arrange <- last_arrange[ sample( ncol( last_arrange), 1),]
   if( max( last_arrange) == 1){
     ## 晚班安排一个人的几率很多小. 
     last <- mutate( last, 
                     x = "A+B")
-  } else if( max( last_arrange) == 2) {
-    last <- mutate( last, 
-                    x = last_arrange)
-  } else if( max( last_arrange) >= 3){
+  } else {
     last <- mutate( last, 
                     x = ifelse( last_arrange >= 3, 1, last_arrange))
   }
   
   
   ## middle_arrange 
-  middle_1 <- filter( t1, `1` %in% middle_1_class)
   middle_1_arrange <- permutations( nrow( middle_1))
   middle_1_arrange <- middle_1_arrange[ sample( ncol( middle_1_arrange), 1),]
   
-  ## 2/B 是否已经安排
-  if( TRUE %in% (c( 2, "B") %in% first$x)) {
+  ## 1/A 是否已经安排
+  if( TRUE %in% (c( 1, "A", "A+B") %in% first$x)) {
     
-    ## 2/B已存在, 是否middle1 时间段仅有一位同事上班
+    ## 1/A已存在, 是否middle1 时间段仅有一位同事上班
     if( max( middle_1_arrange) == 1){
       
-      ## middle1时间段仅有 1位同事上班, 是否已经安排A
-      if( TRUE %in% (c( 1, "A") %in% first$x)){
-        ## A已存在, 则middle1 时间段上班的同事去处理 C.
-        middle_1 <- mutate( middle_1, 
-                            x = 3)
-      } else{ 
-        ## A 不存在, 则middle1 时间段上班的同事去处理 A.
+      ## middle1时间段仅有 1位同事上班, 是否已经安排B
+      if( TRUE %in% (c( 2, "B") %in% first$x)){
+        ## B已存在, 则middle1 时间段上班的同事去处理 A.
         middle_1 <- mutate( middle_1, 
                             x = 1)
+      } else{ 
+        ## A 不存在, 则middle1 时间段上班的同事去处理 B.
+        middle_1 <- mutate( middle_1, 
+                            x = 2)
       }
       ## middle1时间段仅有 2位以上同事上班
     } else {
-      ## 则按照抽样规则排班, 
-      middle_1 <- mutate( middle_1, 
-                          x = ifelse( middle_1_arrange == 2, 3, 1))
+      ## middle1时间段仅有 2位以上同事上班, 是否已经安排B
+      if( TRUE %in% (c( 2, "B") %in% first$x)){
+        ## B已存在, 全部支配给 A. 满足先安排满 A/B, 再安排 C的原则.
+        middle_1 <- mutate( middle_1, 
+                            x = 1)
+      } else{ 
+        ## B 不存在, 同上. 
+        middle_1 <- mutate( middle_1, 
+                            x = ifelse( middle_1_arrange != 2, 1,  middle_1_arrange))
+      }
     }
     ## 2/B 不存在.( 可能性极低, 因为 first 中优先安排 2/B工作.)  
   } else{
     
-    ## 2/B不存在, 是否middle1 时间段仅有一位同事上班
+    ## 1/A/A+B不存在, 是否middle1 时间段仅有一位同事上班
     if( max( middle_1_arrange) == 1){
       
-      ## middle1时间段仅有 1位同事上班, 处理 B.
+      ## middle1时间段仅有 1位同事上班, 处理 A.
       middle_1 <- mutate( middle_1, 
-                          x = 2)
+                          x = 1)
       ## middle1时间段仅有 2位以上同事上班
     } else{
       ## 则按照抽样规则排班, 
@@ -115,48 +132,113 @@ Task_arrange <- function( data, column){
   }
   
   
-  middle_2 <- filter( t1, `1` %in% middle_2_class) 
   middle_2_arrange <- permutations( nrow( middle_2))
   middle_2_arrange <- middle_2_arrange[ sample( ncol( middle_2_arrange), 1),]
-  if( TRUE %in% (c( 2, "B") %in% last$x)) {
+  
+  ## 1/A 是否已经安排
+  if( TRUE %in% ( c( 1, "A", "A+B") %in% last$x)) {
     
-    ##
+    ## 1/A已存在, 是否middle1 时间段仅有一位同事上班
     if( max( middle_2_arrange) == 1){
-      ##
-      if( TRUE %in% (c( 3, "C") %in% middle_1$x)){
+      
+      ## middle2时间段仅有 1位同事上班, 是否已经安排B
+      if( TRUE %in% ( c( 2, "B") %in% last$x)){
+        ## B已存在, 则middle2 时间段上班的同事去处理 A.
         middle_2 <- mutate( middle_2, 
                             x = 1)
       } else{ 
+        ## A 不存在, 则middle2 时间段上班的同事去处理 B.
         middle_2 <- mutate( middle_2, 
-                            x = 3)
-      }
-    } else if( max( middle_2_arrange) >= 2){
-      
-      if( TRUE %in% (c( 3, "C") %in% middle_1$x)){
-        middle_2 <- mutate( middle_2, 
-                            x = 1)
-      } else{
-        middle_2 <- mutate( middle_2, 
-                            x = ifelse( middle_2_arrange == 1, 3, 1))
+                            x = 2)
       }
       
+    ## middle2时间段有 2位以上同事上班
+    } else {
+      ## middle2时间段仅有 2位以上同事上班, 是否已经安排B
+      if( TRUE %in% (c( 2, "B") %in% last$x)){
+        ## B已存在, 
+        if( on_duty_num > 7){
+          middle_2 <- mutate( middle_2, 
+                              x = ifelse( middle_2_arrange == 2, 3, 1))
+        } else{
+          middle_2 <- mutate( middle_2, 
+                              x = 1)
+        }
+        
+      } else{ 
+        ## B 不存在, 同上. 
+        if( on_duty_num > 7){
+          middle_2 <- mutate( middle_2, 
+                              x = ifelse( middle_2_arrange > 3, 1,  middle_2_arrange))
+        } else { 
+          middle_2 <- mutate( middle_2, 
+                              x = ifelse( middle_2_arrange != 2, 1,  middle_2_arrange))
+        }
+      }
     }
+    
   } else{
     
+    ## 1/A/A+B不存在, 是否middle2 时间段仅有一位同事上班
     if( max( middle_2_arrange) == 1){
+      
+      ## middle1时间段仅有 1位同事上班, 处理 A.
       middle_2 <- mutate( middle_2, 
-                          x = 2)
+                          x = 1)
+      ## middle1时间段仅有 2位以上同事上班
     } else{
+      ## 则按照抽样规则排班, 
       middle_2 <- mutate( middle_2, 
                           x = ifelse( middle_2_arrange > 3, 1, middle_2_arrange))
     }
     
   }
   
-  rest <-  filter( t1, `1` == rest_class) %>%
-    mutate( x = 0)
   
-  return( rbind( first, middle_1, middle_2, last, rest))
+  output <- rbind( first, middle_1, middle_2, last, rest) %>%
+    select( -Arrange)
+
+  num_12 <- sum( c( output$x) %in% "A+B")
+  num_1 <- sum( c( output$x) %in% 1)
+  num_2 <- sum( c( output$x) %in% 2)
+  num_3 <- sum( c( output$x) %in% 3)
+
+  output_12 <- filter( output, x == "A+B")
+  output_4 <- filter( output, x == "R")
+  output_1 <- filter( output, x == 1) %>%
+    mutate( x = paste0( "A0", ( 1:num_1) + 1+ num_12))
+
+  output_2 <- filter( output, x == 2) %>%
+    mutate( x = paste0( "B0", ( 1:num_2)))
+  
+  output_3 <- filter( output, x == 3) %>%
+    mutate( x = ifelse( num_3 == 0, "", paste0( "C0", ( 1:num_3))))
+
+  
+  output <- rbind( output_12, output_1, output_2, output_3, output_4)
+  names( output) <- c( "Name", day_of_month)
+  
+  
+  return( output)
+  
 }
 
 
+## Arrange
+Goal <- data.frame()
+for( i in 1:( position_end_col-position_col-1)){
+  
+  temp <- Task_arrange( customer_service, i)
+  if( i == 1){
+    Goal <- temp
+  } else{
+    Goal <- left_join( Goal, temp, by = "Name")
+  }
+  
+}
+arrange( Goal, Name)
+
+
+write.csv( Goal,
+           "Goal_task.csv",
+           row.names = FALSE)
