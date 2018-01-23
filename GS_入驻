@@ -1,0 +1,308 @@
+## Request 2018/1/8
+
+library( readxl) ## read excel file
+library( data.table) ## read csv file
+library( dplyr) ## data manipulation
+library( RODBC) ## Database
+library( tidyr) ## reshape
+library( reshape)
+
+
+setwd( "F:\\Data Analysis Requirement\\2018.01\\2018-01-22【数据分析】联运方&手盟GS入驻")
+
+## 区服开服日期
+server_info <- read_excel( "【正统三国】GS进驻服务器新增数据20180123.xlsx",
+                           sheet = "Sheet1") %>%
+  select( `区服编号`, `开服日期`) %>%
+  filter( `区服编号` >= 14049) %>%
+  mutate( START_DATE = as.Date( format( `开服日期`, format = "%Y-%m-%d")),
+          GAME_SERVER_ID = `区服编号`,
+          Date_after_month = START_DATE + 31) %>%
+  select( GAME_SERVER_ID, START_DATE, Date_after_month) 
+
+
+start_date <- "2017-10-02"
+end_date <- "2018-01-21"
+
+## GAME Info
+Games_Info <- sqlQuery( mysqlgame,
+                        "SELECT ID as GAME_ID, CP_GAME_NAME, SM_GAME_NAME FROM game_platform.games", 
+                        stringsAsFactors = FALSE) %>%
+  filter( CP_GAME_NAME == '正统三国')
+sanguo_game_id <- gsub( " ", "", 
+                        paste( paste( unique( Games_Info$GAME_ID)), collapse = ","))
+
+
+ios_package <- sqlQuery( mysqlgame, 
+                         "SELECT PACKAGE_ID FROM vw_packages_gc  WHERE OLD_NAME = '正统三国' AND PLATFORM_NAME = 'ios'", 
+                         stringsAsFactors = FALSE)
+
+
+## 1. Retention 
+Retention_Raw  <- sqlQuery( mysqlbase, 
+                            paste0( 
+                              "SELECT TDAY, DAY_TYPE, GAME_ID, PACKAGE_ID, NEW_USER_NUM, LOGIN_NUM",
+                              " FROM remain_login",
+                              " WHERE TDAY between '", gsub( "-","",start_date),"' AND '", gsub( "-","",end_date),"' ",
+                              " AND GAME_ID in (", sanguo_game_id, 
+                              ") AND IS_REMOVE = 0 AND SEARCH_TYPE = 2;"
+                            ), 
+                            stringsAsFactors = FALSE)
+##  直接按照 TDAY 匹配 Server_ID
+Retention_Raw$SERVER_ID <- cut( Retention_Raw$TDAY, 
+                                breaks = c( gsub( "-","", server_info$START_DATE), Inf),
+                                label = na.omit( server_info$GAME_SERVER_ID),
+                                right = F)
+
+Retention_IOS <- filter( Retention_Raw,
+                         PACKAGE_ID %in% c( ios_package$PACKAGE_ID),
+                         DAY_TYPE %in% c( 1,3,7,14,30)) %>%
+  group_by( SERVER_ID, DAY_TYPE) %>%
+  summarise( NEW_USER_NUM = sum( NEW_USER_NUM, rm.na = T),
+             LOGIN_NUM = sum( LOGIN_NUM, rm.na = T)) %>%
+  mutate( Retention_Rate = round( LOGIN_NUM/NEW_USER_NUM,4),
+          Client = 'ios') 
+
+Retention_IOS_New_user <- filter( Retention_IOS,
+                                  DAY_TYPE == 1) %>%
+  group_by( SERVER_ID) %>%
+  summarise( NEW_USER_NUM = sum( NEW_USER_NUM))
+
+Retention_IOS <- dcast( Retention_IOS, Client + SERVER_ID ~ DAY_TYPE , value.var = 'Retention_Rate') %>%
+  left_join( Retention_IOS_New_user, by = "SERVER_ID")
+
+
+
+Retention_Android <- filter( Retention_Raw,
+                             !PACKAGE_ID %in% c( ios_package$PACKAGE_ID),
+                             DAY_TYPE %in% c( 1,3,7,14,30)) %>%
+  group_by( SERVER_ID, DAY_TYPE) %>%
+  summarise( NEW_USER_NUM = sum( NEW_USER_NUM, rm.na = T),
+             LOGIN_NUM = sum( LOGIN_NUM, rm.na = T)) %>%
+  mutate( Retention_Rate = round( LOGIN_NUM/NEW_USER_NUM,4),
+          Client = 'android') 
+
+Retention_Android_New_user <- filter( Retention_Android,
+                                      DAY_TYPE == 1) %>%
+  group_by( SERVER_ID) %>%
+  summarise( NEW_USER_NUM = sum( NEW_USER_NUM))
+
+Retention_Android <- dcast( Retention_Android, Client + SERVER_ID ~ DAY_TYPE , value.var = 'Retention_Rate') %>%
+  left_join( Retention_Android_New_user, by = "SERVER_ID")
+
+write.csv( Retention_IOS, "Retention_IOS",  row.names = F)
+write.csv( Retention_Android, "Retention_Android", row.names = F)
+
+
+
+# Payment( 三国)
+payment_sanguo <- sqlQuery( mysqlpy, 
+                            paste0( 
+                              "SELECT LOGIN_ACCOUNT, GAME_ID, PACKAGE_ID, GAME_SERVER_ID, AMOUNT, PAY_TIME",
+                              " FROM py_platform.payment",
+                              " WHERE PAY_TIME between '", start_date," 00:00:00' AND '", end_date," 23:59:59' ",
+                              " AND GAME_ID in (",
+                              sanguo_game_id, ") AND PAY_RESULT = '1'"
+                            ), 
+                            stringsAsFactors = FALSE)
+
+
+## 2. LTV
+arppu_server <- select( payment_sanguo,
+                        PACKAGE_ID, LOGIN_ACCOUNT, GAME_SERVER_ID, PAY_TIME, AMOUNT) %>%
+  mutate( PAYDATE = as.Date( format( PAY_TIME, format = "%Y-%m-%d"))) %>%
+  group_by( PACKAGE_ID, GAME_SERVER_ID, PAYDATE, LOGIN_ACCOUNT) %>%
+  summarise( AMOUNT = sum( AMOUNT)) %>%
+  group_by( PACKAGE_ID, GAME_SERVER_ID, PAYDATE) %>%
+  summarise( Num_of_pay = n(), AMOUNT = sum( AMOUNT)) %>%
+  left_join( server_info, by = "GAME_SERVER_ID") %>%
+  filter( !is.na( START_DATE)) %>%
+  mutate( ARPPU = round( AMOUNT/Num_of_pay, 4)) %>%
+  arrange( PACKAGE_ID, GAME_SERVER_ID, PAYDATE, desc( AMOUNT))
+
+
+server_ltv_ios <- filter( arppu_server, 
+                          !is.na( START_DATE),
+                          PACKAGE_ID %in% c( ios_package$PACKAGE_ID)) %>%
+  mutate( diff_date = PAYDATE - START_DATE + 1,
+          LTV_Value = diff_date,
+          Client = 'ios') %>%
+  group_by( Client, GAME_SERVER_ID, LTV_Value) %>%
+  summarise( AMOUNT = sum( AMOUNT)) %>%
+  dcast( Client + GAME_SERVER_ID  ~ LTV_Value )
+
+
+server_ltv_android <- filter( arppu_server, 
+                              !is.na( START_DATE),
+                              !PACKAGE_ID %in% c( ios_package$PACKAGE_ID)) %>%
+  mutate( diff_date = PAYDATE - START_DATE + 1,
+          LTV_Value = diff_date,
+          Client = 'android') %>%
+  group_by( Client, GAME_SERVER_ID, LTV_Value) %>%
+  summarise( AMOUNT = sum( AMOUNT)) %>%
+  dcast( Client + GAME_SERVER_ID  ~ LTV_Value )
+
+
+## 3. 付费 ARPU & 付费率
+arppu_server_ios <- select( payment_sanguo,
+                        LOGIN_ACCOUNT, GAME_SERVER_ID, PACKAGE_ID, PAY_TIME, AMOUNT) %>%
+  filter( PACKAGE_ID %in% c( ios_package$PACKAGE_ID)) %>%
+  mutate( PAYDATE = as.Date( format( PAY_TIME, format = "%Y-%m-%d"))) %>%
+  group_by( GAME_SERVER_ID, PAYDATE, LOGIN_ACCOUNT) %>%
+  summarise( AMOUNT = sum( AMOUNT)) %>%
+  group_by( GAME_SERVER_ID, PAYDATE) %>%
+  summarise( Num_of_pay = n(), AMOUNT = sum( AMOUNT)) %>%
+  left_join( server_info, by = "GAME_SERVER_ID") %>%
+  filter( !is.na( START_DATE)) %>%
+  mutate( ARPPU = round( AMOUNT/Num_of_pay, 4)) %>%
+  arrange( GAME_SERVER_ID, PAYDATE, desc( AMOUNT))
+
+
+arppu_server_android <- select( payment_sanguo,
+                            LOGIN_ACCOUNT, GAME_SERVER_ID, PACKAGE_ID, PAY_TIME, AMOUNT) %>%
+  filter( !PACKAGE_ID %in% c( ios_package$PACKAGE_ID)) %>%
+  mutate( PAYDATE = as.Date( format( PAY_TIME, format = "%Y-%m-%d"))) %>%
+  group_by( GAME_SERVER_ID, PAYDATE, LOGIN_ACCOUNT) %>%
+  summarise( AMOUNT = sum( AMOUNT)) %>%
+  group_by( GAME_SERVER_ID, PAYDATE) %>%
+  summarise( Num_of_pay = n(), AMOUNT = sum( AMOUNT)) %>%
+  left_join( server_info, by = "GAME_SERVER_ID") %>%
+  filter( !is.na( START_DATE)) %>%
+  mutate( ARPPU = round( AMOUNT/Num_of_pay, 4)) %>%
+  arrange( GAME_SERVER_ID, PAYDATE, desc( AMOUNT))
+
+
+
+write.csv( arppu_server,
+           "ARPPU.csv", 
+           row.names = F)
+
+
+## 4. Find 大R and 超R
+vip_classify <- data.frame( vip_level = c( "普通", "大R", "超R"),
+                            yuanbao = c( 0, 100000, 350000),
+                            recharge = c( 0, 100000, 350000)/10,
+                            stringsAsFactors = FALSE)
+
+# user statistics -- ios
+user_statistics_ios <- select( payment_sanguo, 
+                               LOGIN_ACCOUNT, GAME_SERVER_ID, PACKAGE_ID, AMOUNT) %>%
+  filter( PACKAGE_ID %in% c( ios_package$PACKAGE_ID)) %>%
+  group_by( LOGIN_ACCOUNT, GAME_SERVER_ID, PACKAGE_ID) %>%
+  summarise( AMOUNT = sum( AMOUNT)) %>%
+  arrange( LOGIN_ACCOUNT, desc( AMOUNT))
+
+user_statistics_ios$vip_level <- cut( user_statistics_ios$AMOUNT, 
+                                      breaks = c( vip_classify$recharge, Inf),
+                                      label = vip_classify$vip_level,
+                                      right = F)
+
+vip_distribution_ios <- group_by( user_statistics_ios,
+                                  GAME_SERVER_ID, vip_level) %>%
+  summarise( num_of_vip = n()) %>%
+  left_join( server_info, by = "GAME_SERVER_ID") %>%
+  filter( !is.na( START_DATE)) %>%
+  select( -START_DATE, -Date_after_month) %>%
+  dcast( GAME_SERVER_ID~ vip_level )
+
+
+# user statistics -- android
+user_statistics_android <- select( payment_sanguo, 
+                                   LOGIN_ACCOUNT, GAME_SERVER_ID, PACKAGE_ID, AMOUNT) %>%
+  filter( !PACKAGE_ID %in% c( ios_package$PACKAGE_ID)) %>%
+  group_by( LOGIN_ACCOUNT, GAME_SERVER_ID, PACKAGE_ID) %>%
+  summarise( AMOUNT = sum( AMOUNT)) %>%
+  arrange( LOGIN_ACCOUNT, desc( AMOUNT))
+
+user_statistics_android$vip_level <- cut( user_statistics_android$AMOUNT, 
+                                          breaks = c( vip_classify$recharge, Inf),
+                                          label = vip_classify$vip_level,
+                                          right = F)
+
+vip_distribution_android <- group_by( user_statistics_android,
+                                      GAME_SERVER_ID, vip_level) %>%
+  summarise( num_of_vip = n()) %>%
+  left_join( server_info, by = "GAME_SERVER_ID") %>%
+  filter( !is.na( START_DATE)) %>%
+  select( -START_DATE, -Date_after_month) %>%
+  dcast( GAME_SERVER_ID~ vip_level )
+
+
+write.csv( vip_distribution,
+           "VIP.csv", 
+           row.names = F)
+
+
+
+
+## ------  Find top user from each server & Monthly pay people and amount  ------
+Top_user_output <- data.frame() 
+payment_a_month_output <- data.frame()
+
+for( i in server_info[ 1:nrow( server_info),]$GAME_SERVER_ID){
+  
+  # Globa Var
+  start_date_topUser <- server_info[ server_info$GAME_SERVER_ID == i, ]$START_DATE
+  end_date_topUser <- server_info[ server_info$GAME_SERVER_ID == i, ]$Date_after_month
+  ## Big R & Super R
+  top_user_define <- data.frame( amount_30_days = c( 10000, 35000),
+                                 Role = c( '大R', '超R'))
+  
+  # Payment( 三国)
+  payment_sanguo <- sqlQuery( mysqlpy, 
+                              paste0( 
+                                "SELECT LOGIN_ACCOUNT, GAME_ID, PACKAGE_ID, GAME_SERVER_ID, AMOUNT, PAY_TIME",
+                                " FROM py_platform.payment",
+                                " WHERE PAY_TIME between '", start_date_topUser," 00:00:00' AND '", end_date_topUser," 23:59:59' ",
+                                " AND GAME_ID in (", sanguo_game_id, ")",
+                                " AND GAME_SERVER_ID = ", i, 
+                                " AND PAY_RESULT = '1'"
+                              ), 
+                              stringsAsFactors = FALSE)
+  
+  
+  ## ------  Find top user
+  top_user_list <- group_by( payment_sanguo, LOGIN_ACCOUNT) %>%
+    summarise( AMOUNT = sum( AMOUNT)) %>%
+    filter( AMOUNT >= 10000) %>%
+    arrange( desc( AMOUNT))
+  
+  top_user_list$Role <- cut( top_user_list$AMOUNT, 
+                        breaks = c( top_user_define$amount_30_days, Inf),
+                        label = na.omit( top_user_define$Role),
+                        right = F) 
+  top_user_list <- select( top_user_list, -AMOUNT )
+  
+  ## Top user statistics
+  payment_top_user <- left_join( payment_sanguo, top_user_list,
+                                 by = "LOGIN_ACCOUNT") %>%
+    filter( !is.na( Role) ) %>%
+    mutate( PAY_DATE = as.Date( format( PAY_TIME, format = "%Y-%m-%d")),
+            Value_of_Date = PAY_DATE - start_date_topUser + 1) %>% 
+    group_by( GAME_SERVER_ID, LOGIN_ACCOUNT, Value_of_Date) %>%
+    summarise( AMOUNT = sum( AMOUNT)) %>%
+    dcast( GAME_SERVER_ID + LOGIN_ACCOUNT ~ Value_of_Date )
+  
+  Top_user_output <- bind_rows( Top_user_output, payment_top_user)
+  
+  
+  
+  ## ------  Monthly pay people and amount
+  payment_a_month <- mutate( payment_sanguo,
+                             PAY_DATE = as.Date( format( PAY_TIME, format = "%Y-%m-%d"))) %>% 
+    group_by( GAME_SERVER_ID, PAY_DATE, LOGIN_ACCOUNT) %>%
+    summarise( AMOUNT = sum( AMOUNT)) %>%
+    group_by( GAME_SERVER_ID) %>%
+    summarise( Num_of_pay = n(), AMOUNT = sum( AMOUNT))
+  
+  
+  payment_a_month_output <- bind_rows( payment_a_month_output, payment_a_month)
+  
+  
+}
+
+write.csv( Top_user_output, paste0( i, ".csv"),  row.names = F)
+write.csv( payment_a_month_output, "payment_a_month.csv", row.names = F)
+
+
+
