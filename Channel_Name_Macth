@@ -1,3 +1,10 @@
+Package_ID <- sqlQuery( mysqlgame, 
+                        "SELECT PACKAGE_ID, CHANNEL_NAME FROM game_platform.vw_packages", 
+                        stringsAsFactors = FALSE)
+channel_special <- sqlQuery( mysqlbase, 
+                             "SELECT CHANNEL_ID, NAME, PACKAGE_ID_EGT, PACKAGE_ID_LT FROM base_platform.channel_special", 
+                             stringsAsFactors = FALSE)
+
 {
   ### Step1 : 先匹配固定包号部分（PACKAGES_ID < 100000000），直接merge
   {
