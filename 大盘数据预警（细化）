@@ -1,0 +1,180 @@
+## 大盘数据预警 - 细化到每个包
+
+library( dplyr) ## data manipulation
+library( RODBC) ## Database
+library( ggplot2) ## Visualization
+library( ggrepel) ## Visualization Labes Setting
+library( cowplot)
+
+mysqlbase <- odbcConnect( "mysqlbase", uid = "data_center", pwd = "sjzxytjhv587")
+mysqlgame <- odbcConnect( "game_platform", uid = "data_center", pwd = "sjzxytjhv587")
+mysqlpy <- odbcConnect( "mysqlpy", uid = "data_center", pwd = "sjzxytjhv587") ##查询手盟充值数据
+mysqlpp <- odbcConnect( "mysqlpp", uid = "data_center", pwd = "sjzxytjhv587") ## 注册信息
+
+# setwd( "F:\\Data Analysis Requirement\\2018.01\\2018-01-24【建模】大盘数据预警")
+
+# test_rate <- 0.6697961  ## 2018/01/23 异常新增注册率
+# load( file = "大盘数据20171001-20180123.Rdata")
+
+## ---- Globa Var ----
+# Time Range
+start_date <- Sys.Date() - 15
+end_date <- Sys.Date() - 1
+Main_Project_list <- c( "", "")
+
+All_Daily_Dateset <- sqlQuery( mysqlbase, 
+                               paste0( 
+                                 "SELECT TDAY, GAME_ID, PACKAGE_ID, ACTIVE_NUM, DEVICE_REG_NUM, USER_REG_NUM, NEW_USER_NUM, PAY_MONEY_NUM",  
+                                 " FROM all_daily ",
+                                 " WHERE TDAY BETWEEN ", format( start_date, "%Y%m%d"), " AND ", format( end_date, "%Y%m%d"),
+                                 " AND IS_REMOVE = 0 AND SEARCH_TYPE = 2;"
+                               ), 
+                               stringsAsFactors = FALSE) %>%
+  mutate( New_User_Reg_Rate = round( NEW_USER_NUM/ACTIVE_NUM, 5),
+          Date = as.Date( as.character( TDAY), "%Y%m%d"),
+          Recharge = round( PAY_MONEY_NUM/10000, 4)) 
+
+
+## ---- 全局监控 ----
+## 新增注册率
+New_User_Reg_all <- group_by( All_Daily_Dateset, Date) %>%
+  summarise( ACTIVE_NUM = sum( ACTIVE_NUM), NEW_USER_NUM = sum( NEW_USER_NUM),
+             New_User_Reg_Rate = round( NEW_USER_NUM/ACTIVE_NUM, 5))
+
+## 全局充值金额, 用于查询
+Recharge <- group_by( All_Daily_Dateset, Date) %>%
+  summarise( Recharge = sum( Recharge)) %>%
+  mutate( class = ifelse( Recharge > median( Recharge, na.rm = T), "Wow", "Just so so.."))
+
+## Visualization of Recharge
+(p_recharge <- ggplot( Recharge, aes( Date, Recharge)) +
+    geom_point( color = "maroon", size = 5, pch = 20) +
+    geom_smooth( method = 'loess') +
+    geom_label_repel(
+      aes( Date, Recharge, 
+           fill = factor( class),
+           label = as.character( Date)), 
+      fontface = "bold", color = "white",
+      box.padding = unit( 0.35, "lines"), 
+      point.padding = unit( 0.5, "lines"),
+      segment.colour = "grey50") + 
+    geom_hline( aes( yintercept = median( Recharge, na.rm = T)), 
+                colour = 'maroon', linetype = 'longdash', lwd = 1) +
+    labs( title = paste0( start_date ," 到 ", end_date, " 充值金额"),
+          x = "日期", y = "充值金额(万元)") +
+    scale_x_date( name = "日期", #labels = date_format( "%Y/%m/%d"),
+                  breaks = seq( start_date, end_date, by = "2 days")) +
+    theme_classic( base_size = 16) +
+    theme_bw()
+)
+
+## New_User_Reg_Rate
+train <- filter( New_User_Reg_all, Date < end_date)
+test <-  filter( New_User_Reg_all, Date >= end_date)$New_User_Reg_Rate
+## test <- 0.6697961 # 2018/01/23
+
+sd_Reg_Rate <- sd( train$New_User_Reg_Rate)
+mean_Reg_Rate <- mean( train$New_User_Reg_Rate)
+
+distribution_Reg_Rate <- ( 1/sqrt( 2*pi*( sd_Reg_Rate^2))) * ( exp( ( -( test - mean_Reg_Rate)^2 ) / ( 2*( sd_Reg_Rate^2))) )
+
+if( distribution_Reg_Rate <= 0.5){
+  print( paste0( end_date, " 的新增注册率异常, 请及时排查异常原因."))
+} else if( distribution_Reg_Rate <= 1.2){
+  print( paste0( end_date, " 的新增注册率疑似异常, 请查看下列分布图片, 人为判断是否异常."))
+} else {
+  print( paste0( end_date, " 的新增注册率正常."))
+}
+
+(p_rate <- ggplot( train, aes( x = New_User_Reg_Rate)) +
+    geom_density( fill = 'steelblue', alpha = 0.3) + 
+    geom_vline( 
+      aes( xintercept = test),
+      colour = 'maroon', linetype = 'longdash', lwd = 1) +
+    labs( title = paste0( start_date ," 到 ", end_date, " 新增注册率分布."),
+          x = "%", y = "") +
+    scale_x_continuous( labels = scales::percent) +
+    theme_bw()
+)
+
+
+
+## ---- 进一步深度细化 ----
+Game_ID <- sqlQuery( mysqlgame,
+                   "SELECT ID AS GAME_ID, CP_GAME_NAME, SM_GAME_NAME FROM game_platform.games", 
+                   stringsAsFactors = FALSE)
+Package_ID <- sqlQuery( mysqlgame, 
+                        "SELECT PACKAGE_ID, CHANNEL_NAME FROM game_platform.vw_packages", 
+                        stringsAsFactors = FALSE)
+Channel_Special <- sqlQuery( mysqlbase, 
+                             "SELECT CHANNEL_ID, NAME, PACKAGE_ID_EGT, PACKAGE_ID_LT FROM base_platform.channel_special", 
+                             stringsAsFactors = FALSE)
+
+All_Daily_Dateset <- left_join( All_Daily_Dateset, Game_ID, by = "GAME_ID")
+
+{
+  ## Step1 : 先匹配固定包号部分（PACKAGES_ID < 100000000），直接merge
+  {
+    All_Daily_Dateset_1 <- filter( All_Daily_Dateset,
+                               PACKAGE_ID < 100000000)
+    All_Daily_Dateset_1 <- left_join( All_Daily_Dateset_1, Package_ID,
+                                  by = "PACKAGE_ID")
+  }
+  
+  ## Step2 : PACKAGES_ID >= 100000000, 使用Cut 函数。
+  {  
+    All_Daily_Dateset_2 <- filter( All_Daily_Dateset,
+                               PACKAGE_ID >= 100000000)
+    
+    ### Match Channel name
+    All_Daily_Dateset_2$CHANNEL_NAME <- cut( All_Daily_Dateset_2$PACKAGE_ID, 
+                                         breaks = c( Channel_Special$PACKAGE_ID_EGT, Inf),
+                                         label = as.character( Channel_Special$NAME),
+                                         right = F)
+    
+  }
+  
+  ## 合并两个数据集：字段名顺序不同没关系，能够一一匹配就可以rbind
+  All_Daily_Dateset <- bind_rows( All_Daily_Dateset_1, All_Daily_Dateset_2 ) 
+  rm( All_Daily_Dateset_1, All_Daily_Dateset_2)
+  gc()
+}
+
+
+## 查看是否有注册率极低的渠道, 比如 CPS渠道.
+Low_Num_Channel <- group_by( All_Daily_Dateset,
+                             Date, CHANNEL_NAME) %>%
+  summarise( ACTIVE_NUM = sum( ACTIVE_NUM), NEW_USER_NUM = sum( NEW_USER_NUM),
+             New_User_Reg_Rate = round( NEW_USER_NUM/ACTIVE_NUM, 5)) %>%
+  filter( ACTIVE_NUM >= 100, New_User_Reg_Rate <= 0.25) 
+
+(p_low_num1 <- ggplot( Low_Num_Channel, 
+                      aes( x = Date, y = ACTIVE_NUM, fill = factor( CHANNEL_NAME))) +
+    geom_bar( stat = 'identity', position = 'dodge') +
+    geom_label( stat = 'identity', aes( label = ACTIVE_NUM), label.size = 0.10) +
+    labs( title = paste0( start_date ," 到 ", end_date, " 新增注册率较低的渠道."),
+          x = "日期", y = "新增用户数") +
+    scale_fill_brewer( palette = "Set3") +
+    scale_x_date( date_breaks = "3 day", date_labels = "%Y/%m/%d") +
+    theme_bw() + 
+    theme( legend.position = "none") +
+    guides( fill = guide_legend( title = NULL))
+)
+
+(p_low_num2 <- ggplot( Low_Num_Channel, 
+                     aes( x = Date, y = New_User_Reg_Rate, fill = factor( CHANNEL_NAME))) +
+  geom_bar( stat = 'identity', position = 'dodge') +
+  labs( title = "",
+        x = "日期", y = "新增注册率(%)") +
+  scale_fill_brewer( palette = "Set3") +
+  scale_x_date( date_breaks = "3 day", date_labels = "%Y/%m/%d") +
+  scale_y_continuous( labels = scales::percent) +
+  theme_bw() + 
+  guides( fill = guide_legend( title = NULL))
+)
+
+plot_grid( p_low_num1, p_low_num2)
+
+
+## 
+
