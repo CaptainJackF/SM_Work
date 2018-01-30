@@ -1,33 +1,39 @@
+Game_ID <- sqlQuery( mysqlgame,
+                   "SELECT ID AS GAME_ID, CP_GAME_NAME, SM_GAME_NAME FROM game_platform.games", 
+                   stringsAsFactors = FALSE)
 Package_ID <- sqlQuery( mysqlgame, 
                         "SELECT PACKAGE_ID, CHANNEL_NAME FROM game_platform.vw_packages", 
                         stringsAsFactors = FALSE)
-channel_special <- sqlQuery( mysqlbase, 
+Channel_Special <- sqlQuery( mysqlbase, 
                              "SELECT CHANNEL_ID, NAME, PACKAGE_ID_EGT, PACKAGE_ID_LT FROM base_platform.channel_special", 
                              stringsAsFactors = FALSE)
 
+All_Daily_Dateset <- left_join( All_Daily_Dateset, Game_ID, by = "GAME_ID")
+
 {
-  ### Step1 : 先匹配固定包号部分（PACKAGES_ID < 100000000），直接merge
+  ## Step1 : 先匹配固定包号部分（PACKAGES_ID < 100000000），直接merge
   {
-    register_info_1 <- filter( register_info,
+    All_Daily_Dateset_1 <- filter( All_Daily_Dateset,
                                PACKAGE_ID < 100000000)
-    register_info_1 <- left_join( register_info_1, base1_vw_packages,
+    All_Daily_Dateset_1 <- left_join( All_Daily_Dateset_1, Package_ID,
                                   by = "PACKAGE_ID")
   }
   
-  ### Step2 : PACKAGES_ID >= 100000000, 使用Cut 函数。
+  ## Step2 : PACKAGES_ID >= 100000000, 使用Cut 函数。
   {  
-    register_info_2 <- filter( register_info,
+    All_Daily_Dateset_2 <- filter( All_Daily_Dateset,
                                PACKAGE_ID >= 100000000)
-
+    
     ### Match Channel name
-    register_info_2$CHANNEL_NAME <- cut( register_info_2$PACKAGE_ID, 
-                                         breaks = c( base1_channel_special$PACKAGE_ID_EGT, Inf),
-                                         label = as.character( base1_channel_special$NAME),
+    All_Daily_Dateset_2$CHANNEL_NAME <- cut( All_Daily_Dateset_2$PACKAGE_ID, 
+                                         breaks = c( Channel_Special$PACKAGE_ID_EGT, Inf),
+                                         label = as.character( Channel_Special$NAME),
                                          right = F)
     
   }
   
   ## 合并两个数据集：字段名顺序不同没关系，能够一一匹配就可以rbind
-  register_info_final <- rbind( register_info_1, register_info_2 ) 
-  
+  All_Daily_Dateset <- bind_rows( All_Daily_Dateset_1, All_Daily_Dateset_2 ) 
+  rm( All_Daily_Dateset_1, All_Daily_Dateset_2)
+  gc()
 }
