@@ -44,7 +44,7 @@ New_User_Reg_all <- group_by( All_Daily_Dateset, Date) %>%
 ## 全局充值金额, 用于查询
 Recharge <- group_by( All_Daily_Dateset, Date) %>%
   summarise( Recharge = sum( Recharge)) %>%
-  mutate( class = ifelse( Recharge > median( Recharge, na.rm = T), "Wow", "Just so so.."))
+  mutate( class = factor( ifelse( ( format( Date, "%w") > 4 | format( Date, "%w") == 0), "Weekend", "Workday")))
 
 ## Visualization of Recharge
 (p_recharge <- ggplot( Recharge, aes( Date, Recharge)) +
@@ -52,7 +52,7 @@ Recharge <- group_by( All_Daily_Dateset, Date) %>%
     geom_smooth( method = 'loess') +
     geom_label_repel(
       aes( Date, Recharge, 
-           fill = factor( class),
+           fill = class,
            label = as.character( Date)), 
       fontface = "bold", color = "white",
       box.padding = unit( 0.35, "lines"), 
@@ -67,7 +67,6 @@ Recharge <- group_by( All_Daily_Dateset, Date) %>%
     theme_classic( base_size = 16) +
     theme_bw()
 )
-
 ## New_User_Reg_Rate
 train <- filter( New_User_Reg_all, Date < end_date)
 test <-  filter( New_User_Reg_all, Date >= end_date)$New_User_Reg_Rate
