@@ -1,0 +1,276 @@
+## 仙灵外传系列、正统三国系列—全渠道—新增用户重复度分析
+
+library( readxl) ## read excel file
+library( data.table) ## read csv file
+library( dplyr) ## data manipulation
+library( RODBC) ## Database
+library( tidyr) ## reshape
+
+setwd( "F:\\Data Analysis Requirement\\2018.01\\2018-01-31【数据分析】仙灵外传系列、正统三国系列—全渠道—新增用户重复度分析")
+
+## Global Var
+start_date <- '2018-01-01'
+end_date <- '2018-01-31'
+
+
+## ---- 直接通过 Device_Code 查找register表中的注册数据 ----
+
+mysqlbase <- odbcConnect( "mysqlbase", uid = "data_center", pwd = "sjzxytjhv587")
+mysqlgame <- odbcConnect( "game_platform", uid = "data_center", pwd = "sjzxytjhv587")
+mysqlpp <- odbcConnect( "mysqlpp", uid = "data_center", pwd = "sjzxytjhv587") ## 注册信息
+mysqlpy <- odbcConnect( "mysqlpy", uid = "data_center", pwd = "sjzxytjhv587") ##查询手盟充值数据
+
+## 查询 三国/仙灵外传 的游戏ID, 用于查询原名系列下的所有相关数据.
+game_info <- sqlQuery( mysqlgame, 
+                           paste0( 
+                             "SELECT ID AS GAME_ID, CP_GAME_NAME, SM_GAME_NAME FROM games WHERE CP_GAME_NAME = '仙灵外传'"
+                           ), 
+                           stringsAsFactors = FALSE)
+game_id <- gsub( " ", "", 
+                          paste( "'", paste( unique( game_info$GAME_ID)), "'", collapse = ","))
+
+## 查询 IOS端的包号, 方便下列精确划分出IOS/ 安卓.
+package_info <- sqlQuery( mysqlgame, 
+                       paste0( 
+                         "SELECT GAME_ID, OLD_NAME, GAME_NAME_NEW, PACKAGE_ID, CHANNEL_NAME, PLATFORM_NAME FROM vw_packages_gc ;"
+                       ), 
+                       stringsAsFactors = FALSE)
+package_info_sanguo <- filter( package_info, OLD_NAME == '仙灵外传', PLATFORM_NAME == 'ios')
+package_info <- select( package_info, -OLD_NAME, -PLATFORM_NAME)
+
+## 以下三个数据用于安卓端的渠道和游戏ID匹配
+Game_ID <- sqlQuery( mysqlgame,
+                     "SELECT ID AS GAME_ID, CP_GAME_NAME, SM_GAME_NAME FROM game_platform.games", 
+                     stringsAsFactors = FALSE)
+Package_ID <- sqlQuery( mysqlgame, 
+                        "SELECT PACKAGE_ID, GAME_ID, CHANNEL_NAME FROM game_platform.vw_packages", 
+                        stringsAsFactors = FALSE)
+Channel_Special <- sqlQuery( mysqlbase, 
+                             "SELECT CHANNEL_ID, NAME, PACKAGE_ID_EGT, PACKAGE_ID_LT FROM base_platform.channel_special", 
+                             stringsAsFactors = FALSE)
+
+
+game_act <- sqlQuery( mysqlpp, 
+                      paste0( 
+                        "SELECT * FROM detail_game_active WHERE GAME_ID IN (", game_id, ")",
+                        " AND ACTIVE_TIME BETWEEN '", start_date," 00:00:00' AND '", end_date," 23:59:59' "
+                      ), 
+                      stringsAsFactors = FALSE)
+
+# save( game_act, file = "正统三国激活数据(201701-201801).RData")
+## 与 TJ后台新增激活数一致.
+game_act_ios <- filter( game_act, PACKAGES_ID %in% c( package_info_sanguo$PACKAGE_ID)) %>%
+  mutate( Client = 'ios') 
+
+game_act_android <- filter( game_act, !PACKAGES_ID %in% c( package_info_sanguo$PACKAGE_ID)) %>%
+  mutate( Client = 'android') 
+
+
+## ---- IOS激活数据查询
+ios_device_code <- gsub( " ", "", paste( "'", paste( unique( game_act_ios$DEVICE_CODE)), "'", collapse = ","))
+
+## 查询这批激活 Device_Code 对应的IDFA
+IDFA_18 <- sqlQuery( mysqlbase,
+                  paste0( 
+                    "SELECT IDFA, DEVICE_CODE",  
+                    " FROM idfa_device_user",
+                    " WHERE ADD_TIME between '2018-01-01 00:00:00' AND '2018-01-31 23:59:59' ",
+                    " AND DEVICE_CODE IN(", ios_device_code, ")",
+                    " AND IDFA <> '00000000-0000-0000-0000-000000000000' AND FLAG_KEY IN ('active', 'reg', 'start_app');"
+                  ),
+                  stringsAsFactors = FALSE) %>%
+  distinct( IDFA, DEVICE_CODE)
+
+IDFA_goal <- gsub( " ", "", paste( "'", paste( unique( IDFA_18$IDFA)), "'", collapse = ","))
+#save( IDFA_goal, file = "仙灵外传IDFA.RData")
+
+game_act_ios <- select( game_act_ios, -LOGIN_ACCOUNT, -STATE, -CHANNEL_ID, -REFER, -REFER_PARAM, -Client) %>%
+  left_join( unique( IDFA_18), by = 'DEVICE_CODE') 
+
+## 查询这批 IDFA 在 17年的设备日志
+# IDFA_17 <- sqlQuery( mysqlbase,
+#                     paste0( 
+#                       "SELECT IDFA, DEVICE_CODE, FLAG_KEY, ADD_TIME, CONTACT_ID",  
+#                       " FROM idfa_device_user",
+#                       " WHERE ADD_TIME between '2017-01-01 00:00:00' AND '2017-12-31 23:59:59' ",
+#                       " AND IDFA IN(", IDFA_goal, ")",
+#                       " AND FLAG_KEY IN ('active', 'reg', 'start_app');"
+#                     ),
+#                     stringsAsFactors = FALSE) %>%
+#   distinct( IDFA, DEVICE_CODE)
+load( "仙灵外传IDFA_17.RData")
+IDFA_17 <- IDFA_17_xianling
+names( IDFA_17)[5] <- "ID"
+device_code_goal <- gsub( " ", "", paste( "'", paste( unique( IDFA_17$DEVICE_CODE)), "'", collapse = ","))
+
+game_act_ios_17 <- sqlQuery( mysqlpp, 
+                      paste0( 
+                        "SELECT * FROM detail_game_active ",
+                        " WHERE ACTIVE_TIME BETWEEN '2017-01-01 00:00:00' AND '2017-12-31 23:59:59'",
+                        " AND DEVICE_CODE IN (", device_code_goal, ")"
+                      ), 
+                      stringsAsFactors = FALSE)
+
+## 将同设备同包号的记录去重
+game_act_ios_17 <- left_join( game_act_ios_17, IDFA_17,
+                              by = c( "ID", "DEVICE_CODE")) %>%
+  select( -REFER, -REFER_PARAM, -LOGIN_ACCOUNT, -STATE, -CHANNEL_ID, -FLAG_KEY, -ADD_TIME) 
+  
+game_act_ios_171 <- filter( game_act_ios_17, 
+                           !is.na( IDFA))
+
+game_act_ios_172 <- filter( game_act_ios_17, 
+                            is.na( IDFA), !DEVICE_CODE %in% c( game_act_ios_171$DEVICE_CODE)) %>%
+  distinct( DEVICE_CODE, PACKAGES_ID, .keep_all = TRUE) %>%
+  select( -IDFA) %>%
+  left_join( unique( IDFA_17[ ,1:2]), by = "DEVICE_CODE")
+
+game_act_ios_17 <- bind_rows( game_act_ios_171, game_act_ios_172)
+
+rm( game_act_ios_171, game_act_ios_172)
+gc()
+
+
+ios_act_output <- bind_rows( game_act_ios, game_act_ios_17) %>%
+  rename( PACKAGE_ID = PACKAGES_ID) %>%
+  left_join( package_info, by = c("PACKAGE_ID", "GAME_ID"))
+  
+write.csv( ios_act_output, "game_act_ios_17.csv", row.names = F)
+
+## 所有设备统计.
+st_17 <- group_by( game_act_ios_17, IDFA) %>%
+  summarise( num_17 = n())
+
+st_18 <- group_by( IDFA_18, IDFA) %>%
+  summarise( num_18 = n()) %>%
+  left_join( st_17, by = 'IDFA')
+
+write.csv( st_18, "st_18.csv", row.names = F)
+
+
+## 同原名下设备统计.
+st_same_game <- filter( game_act_ios_17,
+                        PACKAGES_ID %in% c( package_info_sanguo$PACKAGE_ID))
+
+st_17_sanguo <- group_by( st_same_game, IDFA) %>%
+  summarise( num_17 = n())
+
+st_18_sanguo <- group_by( IDFA_18, IDFA) %>%
+  summarise( num_18_sanguo = n()) %>%
+  left_join( st_17_sanguo, by = 'IDFA')
+
+write.csv( st_18_sanguo, "st_18_sanguo.csv", row.names = F)
+
+
+
+
+## ---- Android激活数据查询
+android_device_code <- gsub( " ", "", paste( "'", paste( unique( game_act_android$DEVICE_CODE)), "'", collapse = ","))
+
+game_act_android_18 <- sqlQuery( mysqlpp, 
+                       paste0( 
+                         "SELECT DEVICE_CODE, PACKAGE_ID, MAC, IMEI, IMSI, ACTIVATE_TIME, IP FROM devices ",
+                         " WHERE ACTIVATE_TIME BETWEEN '", start_date," 00:00:00' AND '", end_date," 23:59:59'",
+                         " AND DEVICE_CODE IN (", android_device_code, ")"
+                       ), 
+                       stringsAsFactors = FALSE) %>%
+  filter( PACKAGE_ID %in% c( game_act_android$PACKAGES_ID))
+
+## 有3687个IMEI为空, 81个IMEI为 '000000000000000', 将其剔除,以免查询 17年数据时将错误信息一起查询进来.
+game_act_android_18 <- filter( game_act_android_18, 
+                               IMEI != '', IMEI != '000000000000000', IMEI != '00000000000000',
+                               IMEI != '00000000', IMEI != 'B0000000000000')
+
+IMEI_goal <- gsub( " ", "", paste( "'", paste( unique( game_act_android_18$IMEI)), "'", collapse = ","))
+
+## 查询这批 IMEI 在 17年的设备日志
+game_act_android_17 <- sqlQuery( mysqlpp,
+                                 paste0( 
+                                   "SELECT DEVICE_CODE, PACKAGE_ID, MAC, IMEI, IMSI, ACTIVATE_TIME, IP FROM devices",
+                                   " WHERE ACTIVATE_TIME between '2017-01-01 00:00:00' AND '2017-12-31 23:59:59' ",
+                                   " AND IMEI IN(", IMEI_goal, ")"
+                                 ),
+                                 stringsAsFactors = FALSE)
+
+
+## 所有设备统计
+st_android_17 <- mutate( game_act_android_17,
+                         IMEI = paste0( "'", IMEI)) %>%
+  group_by( IMEI) %>%
+  summarise( num_17 = n())
+
+st_android_18 <- mutate( game_act_android_18,
+                         IMEI = paste0( "'", IMEI)) %>%
+  group_by( IMEI) %>%
+  summarise( num_18 = n()) %>%
+  left_join( st_android_17, by = 'IMEI')
+
+
+## 同原名下设备统计.
+st_same_game_android <- filter( game_act_android_17,
+                                PACKAGE_ID %in% c( game_act_android$PACKAGES_ID)) 
+
+st_android_17 <- mutate( st_same_game_android,
+                         IMEI = paste0( "'", IMEI)) %>%
+  group_by( DEVICE_CODE, PACKAGE_ID,IMEI) %>%
+  summarise( num_17 = n()) %>%
+  group_by( IMEI) %>%
+  summarise( num_17 = n())
+
+st_android_18 <- mutate( game_act_android_18,
+                         IMEI = paste0( "'", IMEI)) %>%
+  group_by( DEVICE_CODE, PACKAGE_ID,IMEI) %>%
+  summarise( num_18 = n()) %>%
+  group_by( IMEI) %>%
+  summarise( num_18 = n()) %>%
+  left_join( st_android_17, by = 'IMEI')
+
+#write.csv( st_android_18, "st_android_18.csv")
+st_same_game_android <- bind_rows( game_act_android_17, game_act_android_18) %>%
+  mutate( IMEI = paste0( "'", IMEI))
+
+{
+  ## Step1 : 先匹配固定包号部分（PACKAGES_ID < 100000000），直接merge
+  {
+    st_same_game_android_1 <- filter( st_same_game_android,
+                              PACKAGE_ID < 100000000)
+    st_same_game_android_1 <- left_join( st_same_game_android_1, Package_ID,
+                                 by = "PACKAGE_ID")
+  }
+  
+  ## Step2 : PACKAGES_ID >= 100000000, 使用Cut 函数。
+  {  
+    st_same_game_android_2 <- filter( st_same_game_android,
+                              PACKAGE_ID >= 100000000)
+    
+    ### Match Channel name
+    st_same_game_android_2$CHANNEL_NAME <- cut( st_same_game_android_2$PACKAGE_ID, 
+                                        breaks = c( Channel_Special$PACKAGE_ID_EGT, Inf),
+                                        label = as.character( Channel_Special$NAME),
+                                        right = F)
+    
+  }
+  
+  ## 合并两个数据集：字段名顺序不同没关系，能够一一匹配就可以rbind
+  st_same_game_android <- bind_rows( st_same_game_android_1, st_same_game_android_2 ) %>%
+    left_join( Game_ID, by = "GAME_ID")
+  
+  rm( st_same_game_android_1, st_same_game_android_2)
+  gc()
+}
+temp <- read_xlsx( "【数据分析】正统三国系列—全渠道—新增用户重复度分析 - 20180201.xlsx", sheet = '正统三国系列重复激活情况（Android）') %>%
+  select( `设备号（IMEI）`, `新老设备`, `重复激活行为（2017）`) %>%
+  rename( IMEI = `设备号（IMEI）`)
+
+st_same_game_android <- left_join( st_same_game_android, temp,
+                                   by = 'IMEI')
+
+write.csv( st_same_game_android, "st_same_game_android.csv")
+
+st_same_game_android <- group_by( st_same_game_android, CHANNEL_NAME) %>%
+  summarise( num = n())
+
+
+
+
+  
