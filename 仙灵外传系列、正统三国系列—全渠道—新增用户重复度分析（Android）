@@ -1,0 +1,257 @@
+## 仙灵外传系列、正统三国系列—全渠道—新增用户重复度分析
+
+library( readxl) ## read excel file
+library( data.table) ## read csv file
+library( dplyr) ## data manipulation
+library( RODBC) ## Database
+library( tidyr) ## reshape
+library( networkD3)
+
+setwd( "F:\\Data Analysis Requirement\\2018.01\\2018-01-31【数据分析】Android - 仙灵外传系列、正统三国系列—全渠道—新增用户重复度分析")
+
+## Global Var
+start_date <- '2018-01-01'
+end_date <- '2018-01-31'
+
+
+## ---- 直接通过 Device_Code 查找register表中的注册数据 ----
+
+mysqlbase <- odbcConnect( "mysqlbase", uid = "data_center", pwd = "sjzxytjhv587")
+mysqlgame <- odbcConnect( "game_platform", uid = "data_center", pwd = "sjzxytjhv587")
+mysqlpp <- odbcConnect( "mysqlpp", uid = "data_center", pwd = "sjzxytjhv587") ## 注册信息
+mysqlpy <- odbcConnect( "mysqlpy", uid = "data_center", pwd = "sjzxytjhv587") ##查询手盟充值数据
+
+## 查询 三国/仙灵外传 的游戏ID, 用于查询原名系列下的所有相关数据.
+game_info <- sqlQuery( mysqlgame, 
+                       paste0( 
+                         "SELECT ID AS GAME_ID, CP_GAME_NAME, SM_GAME_NAME FROM games WHERE CP_GAME_NAME = '仙灵外传'"
+                       ), 
+                       stringsAsFactors = FALSE)
+game_id <- gsub( " ", "", 
+                 paste( "'", paste( unique( game_info$GAME_ID)), "'", collapse = ","))
+
+## 查询 IOS端的包号, 方便下列精确划分出IOS/ 安卓.
+package_info <- sqlQuery( mysqlgame, 
+                          paste0( 
+                            "SELECT GAME_ID, OLD_NAME, GAME_NAME_NEW, PACKAGE_ID, CHANNEL_NAME, PLATFORM_NAME FROM vw_packages_gc ;"
+                          ), 
+                          stringsAsFactors = FALSE)
+package_info_goal <- filter( package_info, OLD_NAME == '仙灵外传', PLATFORM_NAME == 'ios')
+package_info <- select( package_info, -OLD_NAME, -PLATFORM_NAME)
+
+## 以下三个数据用于安卓端的渠道和游戏ID匹配
+Game_ID <- sqlQuery( mysqlgame,
+                     "SELECT ID AS GAME_ID, CP_GAME_NAME, SM_GAME_NAME FROM game_platform.games", 
+                     stringsAsFactors = FALSE)
+Package_ID <- sqlQuery( mysqlgame, 
+                        "SELECT PACKAGE_ID, GAME_ID, CHANNEL_NAME FROM game_platform.vw_packages", 
+                        stringsAsFactors = FALSE)
+Channel_Special <- sqlQuery( mysqlbase, 
+                             "SELECT CHANNEL_ID, NAME, PACKAGE_ID_EGT, PACKAGE_ID_LT FROM base_platform.channel_special", 
+                             stringsAsFactors = FALSE)
+
+
+# game_act <- sqlQuery( mysqlpp, 
+#                       paste0( 
+#                         "SELECT * FROM detail_game_active WHERE GAME_ID IN (", game_id, ")",
+#                         " AND ACTIVE_TIME BETWEEN '", start_date," 00:00:00' AND '", end_date," 23:59:59' "
+#                       ), 
+#                       stringsAsFactors = FALSE)
+# 
+# # save( game_act, file = "正统三国激活数据(201701-201801).RData")
+# ## 与 TJ后台新增激活数一致.
+# game_act_ios <- filter( game_act, PACKAGES_ID %in% c( package_info_goal$PACKAGE_ID)) %>%
+#   mutate( Client = 'ios') 
+# 
+# game_act_android <- filter( game_act, !PACKAGES_ID %in% c( package_info_goal$PACKAGE_ID)) %>%
+#   mutate( Client = 'android') 
+
+
+## ---- 201701 - 201801 所有激活记录 ----
+
+# game_act_1718 <- sqlQuery( mysqlpp, 
+#                            paste0( 
+#                              "SELECT DEVICE_CODE, GAME_ID, PACKAGES_ID, ACTIVE_TIME ",
+#                              " FROM detail_game_active WHERE GAME_ID IN (", game_id, ")",
+#                              " AND ACTIVE_TIME BETWEEN '2017-01-01 00:00:00' AND '2018-01-31 23:59:59';"
+#                            ), 
+#                            stringsAsFactors = FALSE)
+#save( game_act_1718, file = "201701-201801仙灵外传激活数据.RData" )
+
+game_act_1718 <- distinct( game_act_1718,
+                           PACKAGES_ID, DEVICE_CODE, .keep_all = TRUE) %>%
+  rename( PACKAGE_ID = PACKAGES_ID) %>%
+  filter( !PACKAGE_ID %in% package_info_goal$PACKAGE_ID)  ## 剔除IOS包
+
+{
+  ## Step1 : 先匹配固定包号部分（PACKAGES_ID < 100000000），直接merge
+  {
+    game_act_1718_1 <- filter( game_act_1718,
+                               PACKAGE_ID < 100000000)
+    game_act_1718_1 <- left_join( game_act_1718_1, Package_ID,
+                                  by = c( "GAME_ID", "PACKAGE_ID"))
+  }
+  
+  ## Step2 : PACKAGES_ID >= 100000000, 使用Cut 函数。
+  {  
+    game_act_1718_2 <- filter( game_act_1718,
+                               PACKAGE_ID >= 100000000)
+    
+    ### Match Channel name
+    game_act_1718_2$CHANNEL_NAME <- cut( game_act_1718_2$PACKAGE_ID, 
+                                         breaks = c( Channel_Special$PACKAGE_ID_EGT, Inf),
+                                         label = as.character( Channel_Special$NAME),
+                                         right = F)
+    
+  }
+  
+  ## 合并两个数据集：字段名顺序不同没关系，能够一一匹配就可以rbind
+  game_act_1718 <- bind_rows( game_act_1718_1, game_act_1718_2 ) %>%
+    left_join( Game_ID, by = "GAME_ID")
+  
+  rm( game_act_1718_1, game_act_1718_2)
+  gc()
+}
+
+## ---- 2018年1月激活过的 DEVICE_CODE
+game_act_18 <- filter( game_act_1718,
+                       ACTIVE_TIME >= '2018-01-01 00:00:00')
+
+game_act_17 <- filter( game_act_1718,
+                       DEVICE_CODE %in% c( game_act_18$DEVICE_CODE), ACTIVE_TIME < '2018-01-01 00:00:00')
+
+## ---- 新老设备占比统计
+st_17 <- group_by( game_act_17,
+                   DEVICE_CODE) %>%
+  summarise( num_17 = n()) %>%
+  arrange( desc( num_17))
+
+st_18 <- group_by( game_act_18,
+                   DEVICE_CODE) %>%
+  summarise( num_18 = n()) %>%
+  arrange( desc( num_18)) %>%
+  left_join( st_17, by = "DEVICE_CODE")
+
+st_18$num_17[ is.na( st_18$num_17)] <- 0
+# write.csv( st_18, "st_18.csv", row.names = F)
+
+
+## ---- 渠道
+st_channel <- bind_rows( game_act_17, game_act_18) %>%
+  arrange( ACTIVE_TIME) %>%
+  mutate( ID = 1:( nrow( game_act_17) + nrow( game_act_18)))
+
+## 1st Active Channel
+first_act_channel <- select( st_channel,
+                             ID, DEVICE_CODE, ACTIVE_TIME, CHANNEL_NAME) %>%
+  distinct( DEVICE_CODE, .keep_all = TRUE)  
+
+first <- group_by( first_act_channel,
+                   CHANNEL_NAME) %>%
+  summarise( first_num = n()) %>%
+  arrange( desc( first_num))
+
+## 2nd channel
+second_act_channel <- filter( st_channel,
+                              !ID %in% first_act_channel$ID ) %>%
+  select( ID, DEVICE_CODE, ACTIVE_TIME, CHANNEL_NAME) %>%
+  rename( Second_channel = CHANNEL_NAME) %>%
+  left_join( first_act_channel[ ,c( "DEVICE_CODE", "CHANNEL_NAME")], by = "DEVICE_CODE") %>%
+  distinct( DEVICE_CODE, .keep_all = TRUE)
+
+second <- group_by( second_act_channel,
+                    CHANNEL_NAME, Second_channel, DEVICE_CODE) %>%
+  summarise( Second_num = n()) %>%
+  group_by( CHANNEL_NAME, Second_channel) %>%
+  summarise( Second_num = n()) %>%
+  left_join( first, by = "CHANNEL_NAME") %>%
+  filter( first_num >= 1000) %>%
+  arrange( desc( first_num), desc( Second_num)) 
+
+temp <- data.frame()
+for( i in unique( second$CHANNEL_NAME)){
+  temp <- data.frame( CHANNEL_NAME = i, 
+                      Second_channel = "无转移",
+                      Second_num = second$first_num[ second$CHANNEL_NAME == i][1] - 
+                        sum( second$Second_num[ second$CHANNEL_NAME == i]),
+                      first_num = second$first_num[ second$CHANNEL_NAME == i][1])
+  names( temp) <- names( second)
+  second <- bind_rows( second, temp)
+}
+
+## 3th channel
+thrid_act_channel <- filter( st_channel,
+                             !ID %in% first_act_channel$ID, !ID %in% second_act_channel$ID) %>%
+  rename( thrid_channel = CHANNEL_NAME) %>%
+  left_join( first_act_channel[ ,c( "DEVICE_CODE", "CHANNEL_NAME")], by = "DEVICE_CODE") %>%
+  left_join( second_act_channel[ ,c( "DEVICE_CODE", "Second_channel")], by = "DEVICE_CODE") %>%
+  distinct( DEVICE_CODE, .keep_all = TRUE)
+
+thrid <- group_by( thrid_act_channel,
+                   CHANNEL_NAME, Second_channel, thrid_channel, DEVICE_CODE) %>%
+  summarise( thrid_num = n()) %>%
+  group_by( CHANNEL_NAME, Second_channel, thrid_channel) %>%
+  summarise( thrid_num = n()) %>%
+  left_join( second, by = c( "CHANNEL_NAME", "Second_channel")) %>%
+  arrange( desc( Second_num), desc( thrid_num)) %>%
+  mutate( fuzhu = paste0( CHANNEL_NAME, "+", Second_channel))
+
+temp <- data.frame()
+for( i in unique( thrid$fuzhu)){
+  CHANNEL_NAME = strsplit( i, split = "[+]")[[1]][1]
+  Second_channel = strsplit( i, split = "[+]")[[1]][2]
+  
+  temp <- data.frame( CHANNEL_NAME = CHANNEL_NAME, 
+                      Second_channel = Second_channel, 
+                      thrid_channel = "无转移",
+                      thrid_num = thrid$Second_num[ thrid$CHANNEL_NAME == CHANNEL_NAME & thrid$Second_channel == Second_channel][1] - 
+                        sum( thrid$thrid_num[ thrid$CHANNEL_NAME == CHANNEL_NAME & thrid$Second_channel == Second_channel]),
+                      Second_num = thrid$Second_num[ thrid$CHANNEL_NAME == CHANNEL_NAME & thrid$Second_channel == Second_channel][1],
+                      first_num = thrid$first_num[ thrid$CHANNEL_NAME == CHANNEL_NAME & thrid$Second_channel == Second_channel][1],
+                      fuzhu = "")
+  names( temp) <- names( thrid)
+  thrid <- bind_rows( thrid, temp)
+}
+
+
+write.csv( thrid, "仙灵外传系列_渠道统计结果.csv")
+
+# ## 4th channel
+# fourth_act_channel <- filter( st_channel,
+#                               !ID %in% first_act_channel$ID, !ID %in% second_act_channel$ID, !ID %in% thrid_act_channel$ID) %>%
+#   rename( Second_channel = CHANNEL_NAME) %>%
+#   left_join( first_act_channel[ ,c( "DEVICE_CODE", "CHANNEL_NAME")], by = "DEVICE_CODE") %>%
+#   distinct( DEVICE_CODE, .keep_all = TRUE)
+
+second_1 <- mutate( second,
+                    act_channel_1 = ifelse( CHANNEL_NAME == "无转移", "无转移", paste( "1st.", CHANNEL_NAME)),
+                    act_channel_2 = ifelse( Second_channel == "无转移", "无转移", paste( "2nd.", Second_channel)),
+                    value = Second_num) %>%
+  select( act_channel_1, act_channel_2, value) 
+
+thrid_1 <- mutate( thrid,
+                   act_channel_1 = ifelse( CHANNEL_NAME == "无转移", "无转移", paste( "2nd.", Second_channel)),
+                   act_channel_2 = ifelse( thrid_channel == "无转移", "无转移", paste( "3th.", thrid_channel)),
+                   value = thrid_num) %>%
+  select( act_channel_1, act_channel_2, value) 
+
+data_for_plot <- bind_rows( second_1[ ,c( "CHANNEL_NAME", "act_channel_1", "act_channel_2", "value")],
+                            thrid_1[ ,c( "CHANNEL_NAME", "act_channel_1", "act_channel_2", "value")])
+
+temp <- filter( data_for_plot, CHANNEL_NAME == '志趣游（安卓）', 
+                act_channel_2 != "无转移", value >= 10)
+
+
+Sankeyname <- data.frame( name = unique( c( temp$act_channel_1, temp$act_channel_2)),
+                          id = ( 1:length( unique( c( temp$act_channel_1, temp$act_channel_2)))) - 1)
+
+Sankeydata <- merge( temp, Sankeyname, by.x = "act_channel_1", by.y = "name")
+Sankeydata <- merge( Sankeydata, Sankeyname, by.x = "act_channel_2", by.y = "name")
+Sankeydata <- data.frame( Source = Sankeydata$id.x, 
+                          Target = Sankeydata$id.y, 
+                          Value = Sankeydata$value)
+
+sankeyNetwork( Links = Sankeydata, Nodes = Sankeyname, 
+               Source = "Source", Target = "Target", Value = "Value", NodeID = "name", 
+               units = "", fontSize = 11, nodeWidth = 30, nodePadding = 10, height = 500, width = 1000, 
+               sinksRight = F) 
