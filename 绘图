@@ -1,0 +1,171 @@
+# 仙灵外传数据提取需求-运营一部 - 2018.3.9
+
+library( data.table) ## read csv file
+library( dplyr) ## data manipulation
+library( RODBC) ## Database
+library( tidyr) ## reshape
+library( readxl) ## read excel file
+library( ggrepel)
+library( ggplot2)
+library( cowplot)
+
+setwd( "F:\\...\\2018-03-09【数据分析】仙灵外传数据提取分析需求-运营一部")  # 设置工作文件路径
+
+mysqlbase <- odbcConnect( "mysqlbase", uid = "...", pwd = "...")
+mysqlgame <- odbcConnect( "game_platform", uid = "...", pwd = "...")
+mysqlpp <- odbcConnect( "mysqlpp", uid = "...", pwd = "...") ## 注册信息
+mysqlpy <- odbcConnect( "mysqlpy", uid = "...", pwd = "...") ##查询手盟充值数据
+
+## 各区服数据
+server_info <- read_excel( "《仙灵外传》开服及GS进驻排期.xlsx", sheet = 1) %>%
+  mutate( SERVER_OPEN_DATE = format( as.Date( SERVER_OPEN_DATE), "%Y-%m-%d" ))
+
+
+## 以下三个数据用于安卓端的渠道和游戏ID匹配
+Game_ID <- sqlQuery( mysqlgame,
+                     "SELECT ID AS GAME_ID, CP_GAME_NAME, SM_GAME_NAME FROM ...", 
+                     stringsAsFactors = FALSE)
+Package_ID <- sqlQuery( mysqlgame, 
+                        "SELECT PACKAGE_ID, GAME_ID, CHANNEL_NAME FROM ...", 
+                        stringsAsFactors = FALSE)
+Channel_Special <- sqlQuery( mysqlbase, 
+                             "SELECT CHANNEL_ID, NAME, PACKAGE_ID_EGT, PACKAGE_ID_LT FROM ...", 
+                             stringsAsFactors = FALSE)
+
+
+## 仙灵外传_2（合并）相关GAME_ID, 合并2属于 B服, 服务器ID属于1000+;
+## 其中, 1356 和 1596 两个换皮原本属于合并3 和 合并5; 分别在 2/4 和 1/25 并入 B服;
+xianling_2 <- c(910,1042,1153,1420,1369,1441,1432,1371,1387,1445,1233,1235,1488,1468,1481,
+                1494,1510,1504,1460,1463,1515,1448,1541,1542,1562,1560,1569,1577,1576,1583,
+                1549,1558,1586,1596,1646,1650,1649,1648,1635,1628,1608,1641,1625,1647,1597,1667,1523,1696,1356,1596) 
+xianling_2 <- gsub( " ", "", 
+                    paste( xianling_2, collapse = ","))
+
+Recharge_2 <- sqlQuery( mysqlpy, 
+                      paste0( 
+                        "SELECT LOGIN_ACCOUNT, GAME_ID, GAME_SERVER_ID, PACKAGE_ID, AMOUNT, PAY_TIME",
+                        " FROM ...",
+                        " WHERE GAME_ID IN (" , xianling_2,")",
+                        " AND PAY_TIME between '2017-07-26 00:00:00' AND '2018-03-13 23:59:59' ",
+                        " AND GAME_SERVER_ID BETWEEN 1000 AND 1086",
+                        " AND PAY_RESULT = '1';"
+                      ), 
+                      stringsAsFactors = FALSE)
+
+Recharge_2 <- mutate( Recharge_2,
+                      PAY_DAY = format( as.Date( PAY_TIME), "%Y-%m-%d" ),
+                      PAY_MONTH = format( as.Date( PAY_TIME), "%Y-%m" )) %>%
+  left_join( server_info[ , c( 1,4,5,6,7)] , "GAME_SERVER_ID") %>%
+  mutate( diff = difftime( PAY_DAY, SERVER_OPEN_DATE, units = "day")) 
+
+
+
+## 开服节奏 vs 充值金额
+Recharge_server <- filter( Recharge_2,
+                           diff < 7) %>%
+  group_by( LOGIN_ACCOUNT, GAME_SERVER_ID, SERVER_OPEN_DATE, GS入驻, 开服节奏, `开服前3天导量`) %>%
+  summarise( num = n(), amount = sum( AMOUNT)/10000) %>%
+  group_by( GAME_SERVER_ID, SERVER_OPEN_DATE, GS入驻, 开服节奏, `开服前3天导量`) %>%
+  summarise( num = n(), amount = sum( amount)) %>%
+  mutate( ARPPU = amount*10000/num)
+## write.csv( Recharge_server, "各区服数据.csv")
+
+ggplot( Recharge_server, aes( `开服节奏`, amount, colour = as.factor( `GS入驻`))) +
+  geom_point( size = 2) +
+  labs( title = "开服节奏 vs 充值金额",
+        x = "开服节奏(天)", y = "开服7天内充值金额(万元)",
+        colour = "GS入驻") +
+  theme_bw() 
+## 无GS入驻的区服开服节奏长, 充值金额少. 主要原因是开服 7 - 8月, 仙灵外传正式上线;
+## 从点的密集程度来看, 开服节奏普遍为 2-3天一服, 且 3天1服的区服前7天充值水平要优于2天1服的区服;
+
+
+## 开服导量 vs 充值金额
+p2 <- ggplot( Recharge_server, aes( `开服前3天导量`, amount, colour = as.factor( `GS入驻`))) +
+  geom_point( size = 2) +
+  labs( title = "开服导量 vs 充值金额",
+        x = "单服导量(前3天)", y = "开服7天内充值金额(万元)",
+        colour = "GS入驻") +
+  theme_bw( ) +
+  theme( legend.position = "none")
+## 导量越多, 带来的收益越高, 无可厚非, 进一步查看ARPPU 与导量之间的关系;
+
+## ARPPU vs 充值金额
+p3 <- ggplot( Recharge_server, aes( `开服前3天导量`, ARPPU, colour = as.factor( `GS入驻`))) +
+  geom_point( size = 2) +
+  labs( title = "开服导量 vs ARPPU",
+        x = "单服导量(前3天)", y = "ARPPU",
+        colour = "GS入驻") +
+  theme_bw()
+
+## 单服导量在 7500 - 12500 至今, 玩家的ARPPU表现最好, 超过12500之后, 玩家的付费能力下降;
+## 且手盟入驻的区服整体ARPPU 略高于 逗娱入驻区服.
+plot_grid( p2, p3)
+
+## GS影响
+Recharge_server1 <- mutate( Recharge_server, `GS入驻1` = ifelse( `GS入驻` == '无GS入驻', '无GS入驻', '有GS入驻'))
+ggplot( Recharge_server1, aes( GAME_SERVER_ID, amount)) +
+  geom_bar( aes( fill = `GS入驻1`), stat = "identity", position = "dodge", width = 0.8) +
+  labs( title = "有误GS入驻对充值金额造成的影响",
+        x = "服务器ID", y = "开服7天内充值金额(万元)",
+        colour = "GS入驻") +
+  theme_bw() +
+  scale_fill_brewer( palette = "Set1")
+
+
+##  5000 以上大R 
+fuzhu <- data.frame( fenlei = c( 5000,10000,15000,20000,30000,50000,100000,200000),
+                     VIP_Level = factor( c( '0.5 - 1', '1 - 1.5','1.5 - 2','2 - 3',
+                                            '3 - 5','5 - 10','10 - 20','20 - 30')))
+
+Recharge_vip <- group_by( Recharge_2,
+                          LOGIN_ACCOUNT, GAME_SERVER_ID, GS入驻) %>%
+  summarise( AMOUNT = sum( AMOUNT)) %>%
+  filter( AMOUNT >= 5000)
+
+Recharge_vip$VIP_Level <- cut( Recharge_vip$AMOUNT,
+                               breaks = c( fuzhu$fenlei, Inf),
+                               label = fuzhu$VIP_Level,
+                               right = F)
+
+## GS入驻区服中, VIP分布
+Recharge_3 <- group_by( Recharge_vip,
+                         VIP_Level) %>%
+  summarise( num = n()) %>%
+  mutate( percent = paste0( round( num*100/2443, 1), "%"))
+## write.csv( Recharge_3, "充值金额分布.csv")
+
+ggplot( Recharge_3, aes( VIP_Level, num, fill = VIP_Level)) +
+  geom_bar( stat = "identity", position = "dodge", width = 0.8) +
+  geom_text( aes( label = percent), vjust = "bottom", position = position_stack( vjust = 1.05)) + 
+  labs( title = "VIP等级分布",
+        x = "充值金额区间(万元)", y = "VIP用户数",
+        colour = "GS入驻") +
+  theme_bw() +
+  theme( legend.position = "none") +
+  scale_fill_brewer( palette = "Set1")
+
+
+Recharge_GS <- group_by( Recharge_vip,
+                         GS入驻, VIP_Level) %>%
+  summarise( num = n()) 
+
+Recharge_GS$total_num <- rep( c( 1154, 1129, 160), c( 8, 8, 6))
+
+Recharge_GS$server_num <- rep( as.vector( table( server_info$GS入驻)), c( 8, 8, 6))
+
+Recharge_GS <- mutate( Recharge_GS, 
+                       avg_num = round( num/server_num,2),
+                       percent = paste0(round( num*100/total_num, 1), "%"))
+## write.csv( Recharge_GS, "充值金额分（分区服）.csv")
+
+ggplot( Recharge_GS, aes( VIP_Level, avg_num, fill = VIP_Level)) +
+  geom_bar( aes( fill = VIP_Level), stat = "identity", position = "dodge", width = 0.8) +
+  geom_text( aes( label = percent), vjust = "bottom", position = position_stack( vjust = 1.05)) + 
+  facet_grid( . ~  `GS入驻`) + 
+  labs( title = "VIP等级分布(分GS入驻)",
+        x = "充值金额区间(万元)", y = "VIP用户数(均值)",
+        colour = "") +
+  theme_bw() +
+  theme( axis.text.x = element_text( size = 9, angle = 20), legend.position = "none") + 
+  scale_fill_brewer( palette = "Set1")
