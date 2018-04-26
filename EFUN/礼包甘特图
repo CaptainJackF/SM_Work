@@ -1,6 +1,7 @@
 library( dplyr)
 library( readxl)
 library( data.table)
+library( reshape2)
 
 n = 1  ## 需要统计的天数
 year <- format( Sys.Date(), "%Y")
@@ -19,7 +20,7 @@ config_rank <- read_excel( "D:\\Work\\日报\\礼包甘特图\\礼包甘特图�
                            sheet = "Sheet3")
 
 
-efun$`北京时间` <- as.POSIXct( strptime( efun$`充值时间`, "%Y/%m/%d %H:%M")) + 8*60*60
+efun$`北京时间` <- as.POSIXct( strptime( efun$`充值时间`, "%Y-%m-%d %H:%M")) + 8*60*60
 
 efun_result <- filter( efun,
                        `北京时间` > start_date,
@@ -34,7 +35,10 @@ efun_result <- filter( efun,
 
 
 result <- left_join( config_rank, efun_result,
-                     by = "标签")
-result$recharge[ is.na( result$recharge)] <- 0
+                     by = "标签") %>%
+  dcast( 标签 + 排序 ~ Date) %>%
+  arrange( 排序)
+
+result[ is.na( result)] <- 0
 
 write.csv( result, "甘特图统计结果.csv", row.names = F)
