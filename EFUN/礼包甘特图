@@ -39,6 +39,6 @@ result <- left_join( config_rank, efun_result,
   dcast( 标签 + 排序 ~ Date) %>%
   arrange( 排序)
 
-result[ is.na( result)] <- 0
+result[ is.na( result)] <- ""
 
 write.csv( result, "甘特图统计结果.csv", row.names = F)
